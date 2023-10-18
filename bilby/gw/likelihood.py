@@ -17,76 +17,16 @@ from .detector import InterferometerList, get_empty_interferometer, calibration
 from .prior import BBHPriorDict, CBCPriorDict, Cosmological
 from .source import lal_binary_black_hole
 from .utils import (
-    noise_weighted_inner_product, build_roq_weights, zenith_azimuth_to_ra_dec,
+    noise_weighted_inner_product, td_noise_weighted_inner_product, build_roq_weights, zenith_azimuth_to_ra_dec,
     ln_i0
 )
 from .waveform_generator import WaveformGenerator
 from collections import namedtuple
 
-def toeplitz_inv(c):
-    """
-    Compute the inverse of a symmetric Toeplitz matrix using the Levinson-Durbin algorithm.
-
-    Parameters
-    ----------
-    c : array_like
-        First column of the Toeplitz matrix.
-
-    Returns
-    -------
-    inv : ndarray
-        Inverse of the Toeplitz matrix.
-    """
-    n = len(c)
-    a = np.zeros(n)
-    b = np.zeros(n)
-    a[0] = 1 / c[0]
-    b[0] = a[0]
-    for m in range(1, n):
-        alpha = np.sum(c[1:m+1] * a[m-1::-1])
-        beta = np.sum(c[m+1:] * a[:n-m-1])
-        kappa = (1 - alpha**2 - beta**2) / (1 - alpha**2)
-        a[m] = -np.sum(c[m:0:-1] * b[:m]) / kappa
-        b[m] = -np.sum(c[m:0:-1] * a[:m]) / kappa
-        a[:m] += a[m] * b[m-1::-1]
-        b[:m] = b[m-1::-1] + a[m] * b[:m]
-    inv = np.zeros((n, n))
-    for i in range(n):
-        inv[i, i:] = a[:n-i]
-        inv[i:, i] = a[:n-i]
-    return inv
-
-def td_noise_weighted_inner_product(aa, bb, power_spectral_density, duration):
-    """
-    Calculate the noise weighted inner product between two arrays in the time domain.
-
-    Parameters
-    ==========
-    aa: array_like
-        Array to be complex conjugated
-    bb: array_like
-        Array not to be complex conjugated
-    power_spectral_density: array_like
-        Power spectral density of the noise
-    duration: float
-        duration of the data
-
-    Returns
-    =======
-    Noise-weighted inner product.
-    """
-
-    acf = (1/(2*duration))*np.array([np.sum(power_spectral_density*np.exp(2*np.pi*1j*k*np.arange(len(power_spectral_density))/len(power_spectral_density))) for k in range(len(power_spectral_density))])       
-    acf_trunc = acf[:len(aa)]
-    cov = np.fromfunction(lambda i, j: acf_trunc[abs(i-j)], (len(aa), len(aa)))
-    integrand = np.conj(aa) * toeplitz_inv(cov) * bb
-
-    return 4 / duration * np.sum(integrand)
-
 class TD_GravitationalWaveTransient(Likelihood):
     """ A gravitational-wave transient likelihood object
 
-    This is the usual likelihood object to use for transient gravitational
+    This is the time domain likelihood object to use for transient gravitational
     wave parameter estimation. It computes the log-likelihood in the frequency
     domain assuming a colored Gaussian noise model described by a power
     spectral density. See Thrane & Talbot (2019), arxiv.org/abs/1809.02293.
@@ -191,7 +131,7 @@ class TD_GravitationalWaveTransient(Likelihood):
     ):
 
         self.waveform_generator = waveform_generator
-        super(GravitationalWaveTransient, self).__init__(dict())
+        super(TD_GravitationalWaveTransient, self).__init__(dict())
         self.interferometers = InterferometerList(interferometers)
         self.time_marginalization = time_marginalization
         self.distance_marginalization = distance_marginalization
@@ -305,13 +245,13 @@ class TD_GravitationalWaveTransient(Likelihood):
 
         """
         signal = interferometer.get_detector_response(
-            waveform_polarizations, self.parameters)
+            waveform_polarizations, self.parameters).time_domain_strain
 
         if 'recalib_index' in self.parameters:
             signal *= self.calibration_draws[interferometer.name][int(self.parameters['recalib_index'])]
 
-        d_inner_h = interferometer.inner_product(signal=signal)
-        optimal_snr_squared = interferometer.optimal_snr_squared(signal=signal)
+        d_inner_h = interferometer.td_inner_product(signal=signal)
+        optimal_snr_squared = interferometer.td_optimal_snr_squared(signal=signal)
         complex_matched_filter_snr = d_inner_h / (optimal_snr_squared**0.5)
 
         d_inner_h_array = None
@@ -320,8 +260,8 @@ class TD_GravitationalWaveTransient(Likelihood):
         if self.time_marginalization and self.calibration_marginalization:
 
             d_inner_h_integrand = np.tile(
-                interferometer.frequency_domain_strain.conjugate() * signal /
-                interferometer.power_spectral_density_array, (self.number_of_response_curves, 1)).T
+                interferometer.time_domain_strain * signal /
+                interferometer.covariance_matrix, (self.number_of_response_curves, 1)).T
 
             d_inner_h_integrand *= self.calibration_draws[interferometer.name].T
 
@@ -330,7 +270,7 @@ class TD_GravitationalWaveTransient(Likelihood):
                     d_inner_h_integrand[0:-1], axis=0).T
 
             optimal_snr_squared_integrand = 4. / self.waveform_generator.duration *\
-                np.abs(signal)**2 / interferometer.power_spectral_density_array
+                np.abs(signal)**2 / interferometer.covariance_matrix
             optimal_snr_squared_array = np.dot(optimal_snr_squared_integrand,
                                                self.calibration_abs_draws[interferometer.name].T)
 
@@ -407,7 +347,7 @@ class TD_GravitationalWaveTransient(Likelihood):
             log_l -= td_noise_weighted_inner_product(
                 interferometer.time_domain_strain,
                 interferometer.time_domain_strain,
-                interferometer.noise,
+                interferometer.covariance_matrix,
                 self.waveform_generator.duration) / 2
         return float(np.real(log_l))
 

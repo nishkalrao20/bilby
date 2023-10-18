@@ -455,6 +455,22 @@ class Interferometer(object):
                 frequency_array=self.strain_data.frequency_array) *
             self.strain_data.window_factor)
 
+    @property
+    def covariance_matrix(self):
+        """Returns the noise correlation matrix
+
+        Returns
+        =======
+        array_like: An array representation of the noise correlation matrix
+        
+        """
+        power_spectral_density = self.power_spectral_density.get_power_spectral_density_array(frequency_array=self.strain_data.frequency_array) * self.strain_data.window_factor
+        acf = 1/(2*self.strain_data.duration)*np.fft.ifft(power_spectral_density)
+        acf_trunc = acf[:len(self.strain_data.time_array)]
+        covariance_matrix = [[acf_trunc.real[int(abs(i-j))] for j in range(len(acf_trunc))] for i in range(len(acf_trunc))]
+
+        return covariance_matrix
+
     def unit_vector_along_arm(self, arm):
         logger.warning("This method has been moved and will be removed in the future."
                        "Use Interferometer.geometry.unit_vector_along_arm instead.")
@@ -513,6 +529,23 @@ class Interferometer(object):
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
             duration=self.strain_data.duration)
 
+    def td_optimal_snr_squared(self, signal):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+
+        Returns
+        =======
+        float: The optimal signal to noise ratio possible squared
+        """
+        return gwutils.td_optimal_snr_squared(
+            signal=signal,
+            covariance_matrix=self.covariance_matrix,
+            duration=self.strain_data.duration)
+
     def inner_product(self, signal):
         """
 
@@ -531,6 +564,24 @@ class Interferometer(object):
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
             duration=self.strain_data.duration)
 
+    def td_inner_product(self, signal):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+
+        Returns
+        =======
+        float: The optimal signal to noise ratio possible squared
+        """
+        return gwutils.td_noise_weighted_inner_product(
+            aa=signal,
+            bb=self.strain_data.time_domain_strain,
+            covariance_matrix=self.covariance_matrix,
+            duration=self.strain_data.duration)
+    
     def matched_filter_snr(self, signal):
         """
 
