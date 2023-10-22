@@ -2,6 +2,7 @@ import os
 import sys
 
 import numpy as np
+import scipy as sp
 
 from ...core import utils
 from ...core.utils import docstring, logger, PropertyAccessor
@@ -456,6 +457,20 @@ class Interferometer(object):
             self.strain_data.window_factor)
 
     @property
+    def acf(self):
+        """Returns the auto correlation function
+
+        Returns
+        =======
+        array_like: An array representation of the auto correlation function
+        
+        """
+
+        power_spectral_density = self.power_spectral_density_array
+        power_spectral_density[power_spectral_density == np.inf] = 0
+        return 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
+            
+    @property
     def covariance_matrix(self):
         """Returns the noise correlation matrix
 
@@ -464,12 +479,10 @@ class Interferometer(object):
         array_like: An array representation of the noise correlation matrix
         
         """
-        power_spectral_density = self.power_spectral_density.get_power_spectral_density_array(frequency_array=self.strain_data.frequency_array) * self.strain_data.window_factor
-        acf = 1/(2*self.strain_data.duration)*np.fft.ifft(power_spectral_density)
-        acf_trunc = acf[:len(self.strain_data.time_array)]
-        covariance_matrix = [[acf_trunc.real[int(abs(i-j))] for j in range(len(acf_trunc))] for i in range(len(acf_trunc))]
-
-        return covariance_matrix
+        power_spectral_density = self.power_spectral_density_array
+        power_spectral_density[power_spectral_density == np.inf] = 0
+        acf = 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
+        return sp.linalg.toeplitz(acf)
 
     def unit_vector_along_arm(self, arm):
         logger.warning("This method has been moved and will be removed in the future."

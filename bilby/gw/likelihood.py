@@ -23,7 +23,7 @@ from .utils import (
 from .waveform_generator import WaveformGenerator
 from collections import namedtuple
 
-class TD_GravitationalWaveTransient(Likelihood):
+class TDGravitationalWaveTransient(Likelihood):
     """ A gravitational-wave transient likelihood object
 
     This is the time domain likelihood object to use for transient gravitational
@@ -131,7 +131,7 @@ class TD_GravitationalWaveTransient(Likelihood):
     ):
 
         self.waveform_generator = waveform_generator
-        super(TD_GravitationalWaveTransient, self).__init__(dict())
+        super(TDGravitationalWaveTransient, self).__init__(dict())
         self.interferometers = InterferometerList(interferometers)
         self.time_marginalization = time_marginalization
         self.distance_marginalization = distance_marginalization
@@ -347,7 +347,7 @@ class TD_GravitationalWaveTransient(Likelihood):
             log_l -= td_noise_weighted_inner_product(
                 interferometer.time_domain_strain,
                 interferometer.time_domain_strain,
-                interferometer.covariance_matrix,
+                interferometer.acf,
                 self.waveform_generator.duration) / 2
         return float(np.real(log_l))
 

@@ -5,6 +5,7 @@ from math import fmod
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.special import i0e
+import scipy as sp
 
 from ..core.utils import (ra_dec_to_theta_phi,
                           speed_of_light, logger, run_commandline,
@@ -216,7 +217,7 @@ def noise_weighted_inner_product(aa, bb, power_spectral_density, duration):
     integrand = np.conj(aa) * bb / power_spectral_density
     return 4 / duration * np.sum(integrand)
 
-def td_noise_weighted_inner_product(aa, bb, covariance_matrix, duration):
+def td_noise_weighted_inner_product(aa, bb, acf, duration):
     """
     Calculate the noise weighted inner product between two arrays.
 
@@ -226,8 +227,8 @@ def td_noise_weighted_inner_product(aa, bb, covariance_matrix, duration):
         Array to be complex conjugated
     bb: array_like
         Array not to be complex conjugated
-    covariance_matrix: array_like
-        Covariance matrix of the noise
+    acf: array_like
+        Autocorrelation function of the noise
     duration: float
         duration of the data
 
@@ -236,8 +237,8 @@ def td_noise_weighted_inner_product(aa, bb, covariance_matrix, duration):
     Noise-weighted inner product.
     """
 
-    integrand = aa * bb / covariance_matrix
-    return 4 / duration * np.sum(integrand)
+    ow = sp.linalg.solve_toeplitz(acf[:len(aa)], aa)
+    return np.dot(ow, bb)/np.sqrt(np.dot(aa, ow))
 
 
 def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, duration):
@@ -270,7 +271,7 @@ def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, 
     return rho_mf
 
 
-def td_matched_filter_snr(signal, time_domain_strain, covariance_matrix, duration):
+def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
     """
     Calculate the _complex_ matched filter snr of a signal.
     This is <signal|frequency_domain_strain> / optimal_snr
@@ -281,7 +282,7 @@ def td_matched_filter_snr(signal, time_domain_strain, covariance_matrix, duratio
         Array containing the signal
     time_domain_strain: array_like
 
-    covariance_matrix: array_like
+    acf: array_like
 
     duration: float
         Time duration of the signal
@@ -293,9 +294,9 @@ def td_matched_filter_snr(signal, time_domain_strain, covariance_matrix, duratio
     """
     rho_mf = td_noise_weighted_inner_product(
         aa=signal, bb=time_domain_strain,
-        covariance_matrix=covariance_matrix, duration=duration)
+        acf=acf, duration=duration)
     rho_mf /= td_optimal_snr_squared(
-        signal=signal, covariance_matrix=covariance_matrix,
+        signal=signal, acf=acf,
         duration=duration)**0.5
     return rho_mf
 
@@ -320,14 +321,14 @@ def optimal_snr_squared(signal, power_spectral_density, duration):
     return noise_weighted_inner_product(signal, signal, power_spectral_density, duration)
 
 
-def td_optimal_snr_squared(signal, covariance_matrix, duration):
+def td_optimal_snr_squared(signal, acf, duration):
     """
 
     Parameters
     ==========
     signal: array_like
         Array containing the signal
-    covariance_matrix: array_like
+    acf: array_like
 
     duration: float
         Time duration of the signal
@@ -337,7 +338,7 @@ def td_optimal_snr_squared(signal, covariance_matrix, duration):
     float: The matched filter signal to noise ratio squared
 
     """
-    return td_noise_weighted_inner_product(signal, signal, covariance_matrix, duration)
+    return td_noise_weighted_inner_product(signal, signal, acf, duration)
 
 
 def overlap(signal_a, signal_b, power_spectral_density=None, delta_frequency=None,
