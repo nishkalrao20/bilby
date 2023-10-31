@@ -244,8 +244,8 @@ class TDGravitationalWaveTransient(Likelihood):
             The bilby interferometer object
 
         """
-        signal = interferometer.get_detector_response(
-            waveform_polarizations, self.parameters).time_domain_strain
+        signal = interferometer.get_td_detector_response(
+            waveform_polarizations, self.parameters)
 
         if 'recalib_index' in self.parameters:
             signal *= self.calibration_draws[interferometer.name][int(self.parameters['recalib_index'])]
@@ -558,7 +558,7 @@ class TDGravitationalWaveTransient(Likelihood):
         for ifo in self.interferometers:
             ifo_length = len(ifo.time_domain_strain)
             mask = ifo.frequency_mask
-            signal = ifo.get_detector_response(
+            signal = ifo.get_td_detector_response(
                 signal_polarizations, self.parameters)
             signal_long[:ifo_length] = signal
             data[:ifo_length] = np.conj(ifo.time_domain_strain)

@@ -319,6 +319,47 @@ class Interferometer(object):
 
         return signal_ifo
 
+    def get_td_detector_response(self, waveform_polarizations, parameters):
+        """ Get the time domain detector response for a particular waveform
+
+        Parameters
+        ==========
+        waveform_polarizations: dict
+            polarizations of the waveform
+        parameters: dict
+            parameters describing position and time of arrival of the signal
+
+        Returns
+        =======
+        array_like: A 3x3 array representation of the detector response (signal observed in the interferometer)
+        """
+        signal = {}
+        for mode in waveform_polarizations.keys():
+            det_response = self.antenna_response(
+                parameters['ra'],
+                parameters['dec'],
+                parameters['geocent_time'],
+                parameters['psi'], mode)
+
+            signal[mode] = waveform_polarizations[mode] * det_response
+        signal_ifo = sum(signal.values())
+
+        time_shift = self.time_delay_from_geocenter(
+            parameters['ra'], parameters['dec'], parameters['geocent_time'])
+
+        # Be careful to first subtract the two GPS times which are ~1e9 sec.
+        # And then add the time_shift which varies at ~1e-5 sec
+        dt_geocent = parameters['geocent_time'] - self.strain_data.start_time
+        dt = dt_geocent + time_shift
+
+        signal_ifo = signal_ifo * np.exp(-1j * 2 * np.pi * dt * self.strain_data.time_array)
+
+        signal_ifo *= self.calibration_model.get_calibration_factor(
+            self.strain_data.time_array,
+            prefix='recalib_{}_'.format(self.name), **parameters)
+
+        return signal_ifo
+        
     def inject_signal(self, parameters, injection_polarizations=None,
                       waveform_generator=None):
         """ General signal injection method.
@@ -556,7 +597,7 @@ class Interferometer(object):
         """
         return gwutils.td_optimal_snr_squared(
             signal=signal,
-            covariance_matrix=self.covariance_matrix,
+            acf=self.acf,
             duration=self.strain_data.duration)
 
     def inner_product(self, signal):
@@ -592,7 +633,7 @@ class Interferometer(object):
         return gwutils.td_noise_weighted_inner_product(
             aa=signal,
             bb=self.strain_data.time_domain_strain,
-            covariance_matrix=self.covariance_matrix,
+            acf=self.acf,
             duration=self.strain_data.duration)
     
     def matched_filter_snr(self, signal):
