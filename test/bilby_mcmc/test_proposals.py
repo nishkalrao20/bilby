@@ -30,6 +30,8 @@ class TestBaseProposals(unittest.TestCase):
             for i in range(ndim)
         })
         priors["fixedA"] = bilby.core.prior.DeltaFunction(1)
+        priors["infinite_support"] = bilby.core.prior.Normal(0, 1)
+        priors["half_infinite_support"] = bilby.core.prior.HalfNormal(1)
         return priors
 
     def create_random_sample(self, ndim=2):
@@ -37,6 +39,8 @@ class TestBaseProposals(unittest.TestCase):
         p[LOGLKEY] = np.random.normal(0, 1)
         p[LOGPKEY] = -1
         p["fixedA"] = 1
+        p["infinite_support"] = np.random.normal(0, 1)
+        p["half_infinite_support"] = np.abs(np.random.normal(0, 1))
         return Sample(p)
 
     def create_chain(self, n=1000, ndim=2):
@@ -125,6 +129,8 @@ class TestProposals(TestBaseProposals):
 
     def proposal_check(self, prop, ndim=2, N=100):
         chain = self.create_chain(ndim=ndim)
+        if getattr(prop, 'needs_likelihood_and_priors', False):
+            return
 
         print(f"Testing {prop.__class__.__name__}")
         # Timing and return type
@@ -161,29 +167,33 @@ class TestProposals(TestBaseProposals):
     def test_NF_proposal(self):
         priors = self.create_priors()
         chain = self.create_chain(10000)
-        prop = proposals.NormalizingFlowProposal(priors, first_fit=10000)
-        prop.steps_since_refit = 9999
-        start = time.time()
-        p, w = prop(chain)
-        dt = time.time() - start
-        print(f"Training for {prop.__class__.__name__} took dt~{dt:0.2g} [s]")
-        self.assertTrue(prop.trained)
-
-        self.proposal_check(prop)
+        if proposals.NormalizingFlowProposal.check_dependencies():
+            prop = proposals.NormalizingFlowProposal(priors, first_fit=10000)
+            prop.steps_since_refit = 9999
+            start = time.time()
+            p, w = prop(chain)
+            dt = time.time() - start
+            print(f"Training for {prop.__class__.__name__} took dt~{dt:0.2g} [s]")
+            self.assertTrue(prop.trained)
+            self.proposal_check(prop)
+        else:
+            print("nflows not installed, unable to test NormalizingFlowProposal")
 
     def test_NF_proposal_15D(self):
         ndim = 15
         priors = self.create_priors(ndim)
         chain = self.create_chain(10000, ndim=ndim)
-        prop = proposals.NormalizingFlowProposal(priors, first_fit=10000)
-        prop.steps_since_refit = 9999
-        start = time.time()
-        p, w = prop(chain)
-        dt = time.time() - start
-        print(f"Training for {prop.__class__.__name__} took dt~{dt:0.2g} [s]")
-        self.assertTrue(prop.trained)
-
-        self.proposal_check(prop, ndim=ndim)
+        if proposals.NormalizingFlowProposal.check_dependencies():
+            prop = proposals.NormalizingFlowProposal(priors, first_fit=10000)
+            prop.steps_since_refit = 9999
+            start = time.time()
+            p, w = prop(chain)
+            dt = time.time() - start
+            print(f"Training for {prop.__class__.__name__} took dt~{dt:0.2g} [s]")
+            self.assertTrue(prop.trained)
+            self.proposal_check(prop, ndim=ndim)
+        else:
+            print("nflows not installed, unable to test NormalizingFlowProposal")
 
 
 if __name__ == "__main__":

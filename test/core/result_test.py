@@ -59,9 +59,10 @@ class TestResult(unittest.TestCase):
                 d=2,
             )
         )
+        self.outdir = "test_outdir"
         result = bilby.core.result.Result(
             label="label",
-            outdir="outdir",
+            outdir=self.outdir,
             sampler="nestle",
             search_parameter_keys=["x", "y"],
             fixed_parameter_keys=["c", "d"],
@@ -69,6 +70,7 @@ class TestResult(unittest.TestCase):
             sampler_kwargs=dict(test="test", func=lambda x: x),
             injection_parameters=dict(x=0.5, y=0.5),
             meta_data=dict(test="test"),
+            sampling_time=100.0,
         )
 
         n = 100
@@ -86,7 +88,7 @@ class TestResult(unittest.TestCase):
     def tearDown(self):
         bilby.utils.command_line_args.bilby_test_mode = True
         try:
-            shutil.rmtree(self.result.outdir)
+            shutil.rmtree(self.outdir)
         except OSError:
             pass
         del self.result
@@ -133,6 +135,25 @@ class TestResult(unittest.TestCase):
 
         with self.assertRaises(IOError):
             bilby.core.result.read_in_result(filename="not/a/file.json")
+
+        with self.assertRaises(IOError):
+            incomplete_json = """
+{
+  "label": "label",
+  "outdir": "outdir",
+  "sampler": "dynesty",
+  "log_evidence": 0,
+  "log_evidence_err": 0,
+  "log_noise_evidence": 0,
+  "log_bayes_factor": 0,
+  "priors": {
+    "chirp_mass": {
+"""
+            with open("{}/incomplete.json".format(self.result.outdir), "wb") as ff:
+                ff.write(incomplete_json)
+            bilby.core.result.read_in_result(
+                filename="{}/incomplete.json".format(self.result.outdir)
+            )
 
     def test_unset_priors(self):
         result = bilby.core.result.Result(
@@ -235,6 +256,7 @@ class TestResult(unittest.TestCase):
         self.assertEqual(self.result.priors["y"], loaded_result.priors["y"])
         self.assertEqual(self.result.priors["c"], loaded_result.priors["c"])
         self.assertEqual(self.result.priors["d"], loaded_result.priors["d"])
+        self.assertEqual(self.result.sampling_time, loaded_result.sampling_time)
 
     def test_save_and_dont_overwrite_json(self):
         self._save_and_dont_overwrite_test(extension='json')
@@ -470,6 +492,40 @@ class TestResult(unittest.TestCase):
         self.assertTrue(np.array_equal(az.log_likelihood["log_likelihood"].values.squeeze(),
                                        log_likelihood))
 
+    def test_result_caching(self):
+
+        class SimpleLikelihood(bilby.Likelihood):
+            def __init__(self):
+                super().__init__(parameters={"x": None})
+
+            def log_likelihood(self):
+                return -self.parameters["x"]**2
+
+        likelihood = SimpleLikelihood()
+        priors = dict(x=bilby.core.prior.Uniform(-5, 5, "x"))
+
+        # Trivial subclass of Result
+
+        class NotAResult(bilby.core.result.Result):
+            pass
+
+        result = bilby.run_sampler(
+            likelihood, priors, sampler='bilby_mcmc', nsamples=10, L1steps=1,
+            proposal_cycle="default_noGMnoKD", printdt=1,
+            check_point_plot=False,
+            result_class=NotAResult)
+        # result should be specified result_class
+        assert isinstance(result, NotAResult)
+
+        cached_result = bilby.run_sampler(
+            likelihood, priors, sampler='bilby_mcmc', nsamples=10, L1steps=1,
+            proposal_cycle="default_noGMnoKD", printdt=1,
+            check_point_plot=False,
+            result_class=NotAResult)
+
+        # so should a result loaded from cache
+        assert isinstance(cached_result, NotAResult)
+
 
 class TestResultListError(unittest.TestCase):
     def setUp(self):
@@ -614,10 +670,15 @@ class TestResultListError(unittest.TestCase):
         with self.assertRaises(bilby.result.ResultListError):
             self.nested_results.combine()
 
-    def test_combine_inconsistent_data_nan(self):
+    def test_combine_data_all_nan_consistent(self):
         self.nested_results[0].log_noise_evidence = np.nan
         self.nested_results[1].log_noise_evidence = np.nan
         self.nested_results.combine()
+
+    def test_combine_inconsistent_data_one_nan(self):
+        self.nested_results[0].log_noise_evidence = np.nan
+        with self.assertRaises(bilby.result.ResultListError):
+            self.nested_results.combine()
 
     def test_combine_inconsistent_sampling_data(self):
         result = bilby.core.result.Result(
@@ -655,6 +716,39 @@ class TestMiscResults(unittest.TestCase):
         labels = ["a", "$a$", "a_1", "$a_1$"]
         labels_checked = bilby.core.result.sanity_check_labels(labels)
         self.assertEqual(labels_checked, ["a", "$a$", "a-1", "$a_1$"])
+
+
+class TestPPPlots(unittest.TestCase):
+
+    def setUp(self):
+        priors = bilby.core.prior.PriorDict(dict(
+            a=bilby.core.prior.Uniform(0, 1, latex_label="$a$"),
+            b=bilby.core.prior.Uniform(0, 1, latex_label="$b$"),
+        ))
+        self.results = [
+            bilby.core.result.Result(
+                label=str(ii),
+                outdir='.',
+                search_parameter_keys=list(priors.keys()),
+                priors=priors,
+                injection_parameters=priors.sample(),
+                posterior=pd.DataFrame(priors.sample(500)),
+            )
+            for ii in range(10)
+        ]
+
+    def test_make_pp_plot(self):
+        _ = bilby.core.result.make_pp_plot(self.results, save=False)
+
+    def test_pp_plot_raises_error_with_wrong_number_of_lines(self):
+        with self.assertRaises(ValueError):
+            _ = bilby.core.result.make_pp_plot(self.results, save=False, lines=["-"])
+
+    def test_pp_plot_raises_error_with_wrong_number_of_confidence_intervals(self):
+        with self.assertRaises(ValueError):
+            _ = bilby.core.result.make_pp_plot(
+                self.results, save=False, confidence_interval_alpha=[0.1]
+            )
 
 
 if __name__ == "__main__":

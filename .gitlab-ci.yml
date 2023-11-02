@@ -15,21 +15,50 @@ stages:
   - docs
   - deploy
 
+# ------------------- Initial stage -------------------------------------------
+
+.list-env: &list-env
+  - PREFIX="$(dirname $(which python))/.."
+  - if [ -d "${PREFIX}/conda-meta" ]; then
+      conda list --prefix "${PREFIX}" --show-channel-urls;
+    else
+      python -m pip list installed;
+    fi
+
+# Check author list is up to date
+authors:
+  stage: initial
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  script:
+    - python test/check_author_list.py
+
+# Test containers scripts are up to date
+containers:
+  stage: initial
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  script:
+    - cd containers
+    - python write_dockerfiles.py #HACK
+    # Fail if differences exist. If this fails, you may need to run
+    # write_dockerfiles.py and commit the changes.
+    - git diff --exit-code
+
 .test-python: &test-python
   stage: initial
   image: python
-  before_script:
-    # this is required because pytables doesn't use a wheel on py37
-    - apt-get -yqq update
-    - apt-get -yqq install libhdf5-dev
   script:
     - python -m pip install .
+    - *list-env
     - python -c "import bilby"
+    - python -c "import bilby.bilby_mcmc"
     - python -c "import bilby.core"
     - python -c "import bilby.core.prior"
     - python -c "import bilby.core.sampler"
+    - python -c "import bilby.core.utils"
     - python -c "import bilby.gw"
     - python -c "import bilby.gw.detector"
+    - python -c "import bilby.gw.eos"
+    - python -c "import bilby.gw.likelihood"
     - python -c "import bilby.gw.sampler"
     - python -c "import bilby.hyper"
     - python -c "import cli_bilby"
@@ -38,47 +67,159 @@ stages:
           ${script} --help;
       done
 
-# test basic setup on python3
-basic-3.7:
+basic-3.9:
   <<: *test-python
-  image: python:3.7
+  image: python:3.9
 
-# test example on python 3.7
-python-3.7:
-  stage: test
-  needs: ["basic-3.7", "precommits-py3.7"]
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
+basic-3.10:
+  <<: *test-python
+  image: python:3.10
+
+.test-samplers-import: &test-samplers-import
+  stage: initial
   script:
     - python -m pip install .
+    - *list-env
+    - python test/test_samplers_import.py
 
-    # Run pyflakes
-    - flake8 .
+import-samplers-3.9:
+  <<: *test-samplers-import
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python39
 
-    # Run tests and collect coverage data
+import-samplers-3.10:
+  <<: *test-samplers-import
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+
+.precommits: &precommits
+  stage: initial
+  script:
+    - source activate $PYVERSION
+    - mkdir -p $CACHE_DIR
+    - pip install --upgrade pip
+    - pip --cache-dir=$CACHE_DIR install --upgrade bilby
+    - pip --cache-dir=$CACHE_DIR install .
+    - pip --cache-dir=$CACHE_DIR install pre-commit
+    # Run precommits (flake8, spellcheck, isort, no merge conflicts, etc)
+    - pre-commit run --all-files --verbose --show-diff-on-failure
+
+precommits-py3.9:
+  <<: *precommits
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python39
+  variables:
+    CACHE_DIR: ".pip39"
+    PYVERSION: "python39"
+
+precommits-py3.10:
+  <<: *precommits
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  variables:
+    CACHE_DIR: ".pip310"
+    PYVERSION: "python310"
+
+install:
+  stage: initial
+  parallel:
+    matrix:
+      - EXTRA: [gw, mcmc, all]
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  script:
+    - pip install .[$EXTRA]
+
+# ------------------- Test stage -------------------------------------------
+
+.unit-tests: &unit-test
+  stage: test
+  script:
+    - python -m pip install .
+    - *list-env
+
     - pytest --cov=bilby --durations 10
-    - coverage html
-    - coverage-badge -o coverage_badge.svg -f
 
+python-3.9:
+  <<: *unit-test
+  needs: ["basic-3.9", "precommits-py3.9"]
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python39
+
+python-3.10:
+  <<: *unit-test
+  needs: ["basic-3.10", "precommits-py3.10"]
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  after_script:
+    - coverage html
+    - coverage xml
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
   artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
     paths:
-      - coverage_badge.svg
       - htmlcov/
+    expire_in: 30 days
+
+.test-sampler: &test-sampler
+  stage: test
+  script:
+    - python -m pip install .[all]
+    - *list-env
+    - pytest test/integration/sampler_run_test.py --durations 10 -v
+
+python-3.9-samplers:
+  <<: *test-sampler
+  needs: ["basic-3.9", "precommits-py3.9"]
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python39
+
+python-3.10-samplers:
+  <<: *test-sampler
+  needs: ["basic-3.10", "precommits-py3.10"]
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+
+integration-tests-python-3.10:
+  stage: test
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  needs: ["basic-3.10", "precommits-py3.10"]
+  only:
+    - schedules
+  script:
+    - python -m pip install .
+    - *list-env
+    # Run tests which are only done on schedule
+    - pytest test/integration/example_test.py
+
+.plotting: &plotting
+  stage: test
+  only:
+    - schedules
+  script:
+    - python -m pip install .
+    - *list-env
+    - pytest test/gw/plot_test.py
+
+plotting-python-3.9:
+  <<: *plotting
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python39
+  needs: ["basic-3.9", "precommits-py3.9"]
+
+plotting-python-3.10:
+  <<: *plotting
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  needs: ["basic-3.10", "precommits-py3.10"]
+
+# ------------------- Docs stage -------------------------------------------
 
 docs:
   stage: docs
-  needs: ["basic-3.7"]
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
+  before_script:
+    - conda install -c conda-forge pandoc ipython jupyter nbconvert
+    - python -m pip install ipykernel
+    - python -m ipykernel install
   script:
     # Make the documentation
-    - apt-get -yqq install pandoc
     - python -m pip install .
-    - cd docs
-    - pip install ipykernel ipython jupyter
-    - cp ../examples/tutorials/*.ipynb ./
-    - rm basic_ptmcmc_tutorial.ipynb
-    - rm compare_samplers.ipynb
-    - rm visualising_the_results.ipynb
-    - jupyter nbconvert --to notebook --execute *.ipynb --inplace
+    - cd examples/tutorials
+    - jupyter nbconvert --to notebook --execute *.ipynb --output-dir ../../docs
+    - cd ../../docs
     - make clean
     - make html
 
@@ -86,86 +227,14 @@ docs:
     paths:
       - docs/_build/html/
 
-# test example on python 3.8
-python-3.8:
-  stage: test
-  needs: ["basic-3.7", "precommits-py3.7"]
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python38
-  script:
-    - python -m pip install .
-
-    - pytest
-
-# test samplers on python 3.7
-python-3.7-samplers:
-  stage: test
-  needs: ["basic-3.7", "precommits-py3.7"]
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
-  script:
-    - python -m pip install .
-
-    - pytest test/integration/sampler_run_test.py --durations 10
-
-# test samplers on python 3.8
-python-3.8-samplers:
-  stage: test
-  needs: ["basic-3.7", "precommits-py3.7"]
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python38
-  script:
-    - python -m pip install .
-
-    - pytest test/integration/sampler_run_test.py --durations 10
-
-# Test containers are up to date
-containers:
-  stage: initial
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
-  script:
-    - cd containers
-    - python write_dockerfiles.py
-    # Fail if differences exist. If this fails, you may need to run
-    # write_dockerfiles.py and commit the changes.
-    - git diff --exit-code
-
-# Tests run at a fixed schedule rather than on push
-scheduled-python-3.7:
-  stage: test
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
-  only:
-    - schedules
-  script:
-    - python -m pip install .
-
-    # Run tests which are only done on schedule
-    - pytest test/integration/example_test.py
-
-plotting:
-  stage: test
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
-  only:
-    - schedules
-  script:
-    - python -m pip install .
-    - python -m pip install ligo.skymap
-
-    - pytest test/gw/plot_test.py
-
-authors:
-  stage: initial
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
-  script:
-    - python test/check_author_list.py
+# ------------------- Deploy stage -------------------------------------------
 
 pages:
   stage: deploy
-  needs: ["docs", "python-3.7"]
-  dependencies:
-    - docs
-    - python-3.7
+  needs: ["docs", "python-3.10"]
   script:
     - mkdir public/
     - mv htmlcov/ public/
-    - mv coverage_badge.svg public/
     - mv docs/_build/html/* public/
   artifacts:
     paths:
@@ -174,31 +243,45 @@ pages:
   only:
     - master
 
-deploy_release:
+.build-container: &build-container
   stage: deploy
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
+  image: docker:20.10.23
+  needs: ["containers"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        compare_to: 'refs/heads/main'
+        paths:
+          - containers/*
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  script:
+    - cd containers
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --tag v3-bilby-$PYVERSION - < v3-dockerfile-test-suite-$PYVERSION
+    - docker image tag v3-bilby-$PYVERSION containers.ligo.org/lscsoft/bilby/v2-bilby-$PYVERSION:latest
+    - docker image push containers.ligo.org/lscsoft/bilby/v2-bilby-$PYVERSION:latest
+
+build-python39-container:
+  <<: *build-container
+  variables:
+    PYVERSION: "python39"
+
+build-python310-container:
+  <<: *build-container
+  variables:
+    PYVERSION: "python310"
+
+pypi-release:
+  stage: deploy
+  image: containers.ligo.org/lscsoft/bilby/v2-bilby-python310
   variables:
     TWINE_USERNAME: $PYPI_USERNAME
     TWINE_PASSWORD: $PYPI_PASSWORD
   before_script:
-    - pip install twine
-    - python setup.py sdist
+    - python -m pip install twine setuptools_scm build
+    - python -m build --sdist --wheel --outdir dist/ .
   script:
     - twine upload dist/*
   only:
-  - tags
-
-
-precommits-py3.7:
-  stage: initial
-  image: quay.io/bilbydev/v2-dockerfile-test-suite-python37
-  script:
-    - source activate python37
-    - mkdir -p .pip37
-    - pip install --upgrade pip
-    - pip --cache-dir=.pip37 install --upgrade bilby
-    - pip --cache-dir=.pip37 install .
-    - pip --cache-dir=.pip37 install pre-commit
-
-    # Run precommits (flake8, spellcheck, isort, no merge conflicts, etc)
-    - pre-commit run --all-files --verbose --show-diff-on-failure
+    - tags

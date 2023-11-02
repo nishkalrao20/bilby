@@ -7,8 +7,13 @@ import numpy as np
 import scipy.stats
 from scipy.interpolate import interp1d
 
-from bilby.core.utils import infer_args_from_method, BilbyJsonEncoder, decode_bilby_json, logger, \
-    get_dict_with_properties
+from ..utils import (
+    infer_args_from_method,
+    BilbyJsonEncoder,
+    decode_bilby_json,
+    logger,
+    get_dict_with_properties,
+)
 
 
 class Prior(object):
@@ -124,7 +129,9 @@ class Prior(object):
         float: A random number between 0 and 1, rescaled to match the distribution of this Prior
 
         """
-        self.least_recently_sampled = self.rescale(np.random.uniform(0, 1, size))
+        from ..utils.random import rng
+
+        self.least_recently_sampled = self.rescale(rng.uniform(0, 1, size))
         return self.least_recently_sampled
 
     def rescale(self, val):
@@ -214,22 +221,13 @@ class Prior(object):
 
         """
         prior_name = self.__class__.__name__
+        prior_module = self.__class__.__module__
         instantiation_dict = self.get_instantiation_dict()
-        args = ', '.join(['{}={}'.format(key, repr(instantiation_dict[key]))
-                          for key in instantiation_dict])
-        return "{}({})".format(prior_name, args)
-
-    @property
-    def _repr_dict(self):
-        """
-        Get a dictionary containing the arguments needed to reproduce this object.
-        """
-        property_names = {p for p in dir(self.__class__) if isinstance(getattr(self.__class__, p), property)}
-        subclass_args = infer_args_from_method(self.__init__)
-        dict_with_properties = self.__dict__.copy()
-        for key in property_names.intersection(subclass_args):
-            dict_with_properties[key] = getattr(self, key)
-        return {key: dict_with_properties[key] for key in subclass_args}
+        args = ', '.join([f'{key}={repr(instantiation_dict[key])}' for key in instantiation_dict])
+        if "bilby.core.prior" in prior_module:
+            return f"{prior_name}({args})"
+        else:
+            return f"{prior_module}.{prior_name}({args})"
 
     @property
     def is_fixed(self):
@@ -333,7 +331,7 @@ class Prior(object):
 
     @classmethod
     def from_repr(cls, string):
-        """Generate the prior from it's __repr__"""
+        """Generate the prior from its __repr__"""
         return cls._from_repr(string)
 
     @classmethod
@@ -405,6 +403,10 @@ class Prior(object):
             The string is interpreted as a call to instantiate another prior
             class, Bilby will attempt to recursively construct that prior,
             e.g., Uniform(minimum=0, maximum=1), my.custom.PriorClass(**kwargs).
+        - Else If the string contains a ".":
+            It is treated as a path to a Python function and imported, e.g.,
+            "some_module.some_function" returns
+            :code:`import some_module; return some_module.some_function`
         - Else:
             Try to evaluate the string using `eval`. Only built-in functions
             and numpy methods can be used, e.g., np.pi / 2, 1.57.
@@ -429,9 +431,9 @@ class Prior(object):
             val = None
         elif re.sub(r'\'.*\'', '', val) in ['r', 'u']:
             val = val[2:-1]
-        elif "'" in val:
+        elif val.startswith("'") and val.endswith("'"):
             val = val.strip("'")
-        elif '(' in val:
+        elif '(' in val and not val.startswith(("[", "{")):
             other_cls = val.split('(')[0]
             vals = '('.join(val.split('(')[1:])[:-1]
             if "." in other_cls:
@@ -445,10 +447,17 @@ class Prior(object):
             try:
                 val = eval(val, dict(), dict(np=np, inf=np.inf, pi=np.pi))
             except NameError:
-                raise TypeError(
-                    "Cannot evaluate prior, "
-                    "failed to parse argument {}".format(val)
-                )
+                if "." in val:
+                    module = '.'.join(val.split('.')[:-1])
+                    func = val.split('.')[-1]
+                    new_val = getattr(import_module(module), func, val)
+                    if val == new_val:
+                        raise TypeError(
+                            "Cannot evaluate prior, "
+                            f"failed to parse argument {val}"
+                        )
+                    else:
+                        val = new_val
         return val
 
 

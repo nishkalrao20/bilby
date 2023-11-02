@@ -1,3 +1,4 @@
+from . import random
 from .calculus import *
 from .cmd import *
 from .colors import *
@@ -9,7 +10,6 @@ from .introspection import *
 from .io import *
 from .log import *
 from .plotting import *
-from .progress import *
 from .samples import *
 from .series import *
 

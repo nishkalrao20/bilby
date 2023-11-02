@@ -135,6 +135,27 @@ class TestPriorClasses(unittest.TestCase):
                 minimum=5e0,
                 maximum=1e2,
             ),
+            bilby.core.prior.Triangular(
+                name="test",
+                unit="unit",
+                minimum=-1.1,
+                maximum=3.14,
+                mode=0.,
+            ),
+            bilby.core.prior.Triangular(
+                name="test",
+                unit="unit",
+                minimum=0.,
+                maximum=4.,
+                mode=4.,
+            ),
+            bilby.core.prior.Triangular(
+                name="test",
+                unit="unit",
+                minimum=2.,
+                maximum=5.,
+                mode=2.,
+            ),
             bilby.gw.prior.ConditionalUniformComovingVolume(
                 condition_func=condition_func, name="redshift", minimum=0.1, maximum=1.0
             ),
@@ -673,7 +694,7 @@ class TestPriorClasses(unittest.TestCase):
                     "bilby.core.prior.MultivariateGaussianDist",
                 )
             elif isinstance(prior, bilby.gw.prior.HealPixPrior):
-                repr_prior_string = "bilby.gw.prior." + repr(prior)
+                repr_prior_string = repr(prior)
                 repr_prior_string = repr_prior_string.replace(
                     "HealPixMapPriorDist", "bilby.gw.prior.HealPixMapPriorDist"
                 )
@@ -702,6 +723,7 @@ class TestPriorClasses(unittest.TestCase):
                     bilby.core.prior.Gamma,
                     bilby.core.prior.MultivariateGaussian,
                     bilby.core.prior.FermiDirac,
+                    bilby.core.prior.Triangular,
                     bilby.gw.prior.HealPixPrior,
                 ),
             ):
@@ -725,6 +747,7 @@ class TestPriorClasses(unittest.TestCase):
                     bilby.core.prior.Gamma,
                     bilby.core.prior.MultivariateGaussian,
                     bilby.core.prior.FermiDirac,
+                    bilby.core.prior.Triangular,
                     bilby.gw.prior.HealPixPrior,
                 ),
             ):

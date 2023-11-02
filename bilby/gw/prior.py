@@ -12,15 +12,17 @@ from ..core.prior import (
     ConditionalPriorDict, ConditionalBasePrior, BaseJointPriorDist, JointPrior,
     JointPriorDistError,
 )
-from ..core.utils import infer_args_from_method, logger
+from ..core.utils import infer_args_from_method, logger, random
 from .conversion import (
     convert_to_lal_binary_black_hole_parameters,
     convert_to_lal_binary_neutron_star_parameters, generate_mass_parameters,
     generate_tidal_parameters, fill_from_fixed_priors,
+    generate_all_bbh_parameters,
     chirp_mass_and_mass_ratio_to_total_mass,
     total_mass_and_mass_ratio_to_component_masses)
-from .cosmology import get_cosmology
+from .cosmology import get_cosmology, z_at_value
 from .source import PARAMETER_SETS
+from .utils import calculate_time_to_merger
 
 
 DEFAULT_PRIOR_DIR = os.path.join(os.path.dirname(__file__), 'prior_files')
@@ -66,7 +68,7 @@ def convert_to_flat_in_component_mass_prior(result, fraction=0.25):
         priors[key] = Constraint(priors[key].minimum, priors[key].maximum, key, latex_label=priors[key].latex_label)
     for key in ['mass_1', 'mass_2']:
         priors[key] = Uniform(priors[key].minimum, priors[key].maximum, key, latex_label=priors[key].latex_label,
-                              unit="$M_{\odot}$")
+                              unit=r"$M_{\odot}$")
 
     weights = np.array(result.get_weights_by_new_prior(old_priors, priors,
                                                        prior_names=['chirp_mass', 'mass_ratio', 'mass_1', 'mass_2']))
@@ -90,6 +92,9 @@ def convert_to_flat_in_component_mass_prior(result, fraction=0.25):
 
 
 class Cosmological(Interped):
+    """
+    Base prior class for cosmologically aware distance parameters.
+    """
 
     @property
     def _default_args_dict(self):
@@ -103,6 +108,29 @@ class Cosmological(Interped):
 
     def __init__(self, minimum, maximum, cosmology=None, name=None,
                  latex_label=None, unit=None, boundary=None):
+        """
+
+        Parameters
+        ----------
+        minimum: float
+            The minimum value for the distribution.
+        maximum: float
+            The maximum value for the distribution.
+        cosmology: Union[None, str, dict, astropy.cosmology.FLRW]
+            The cosmology to use, see `bilby.gw.cosmology.set_cosmology`
+            for more details.
+            If :code:`None`, the default cosmology will be used.
+        name: str
+            The name of the parameter, should be one of
+            :code:`[luminosity_distance, comoving_distance, redshift]`.
+        latex_label: str
+            Latex string to use in plotting, if :code:`None`, this will
+            be set automatically using the name.
+        unit: Union[str, astropy.units.Unit]
+            The unit of the maximum and minimum values, :code:`default=Mpc`.
+        boundary: str
+            The boundary condition to apply to the prior when sampling.
+        """
         from astropy import units
         self.cosmology = get_cosmology(cosmology)
         if name not in self._default_args_dict:
@@ -168,7 +196,6 @@ class Cosmological(Interped):
         recalculate_array: boolean
             Determines if the distance arrays are recalculated
         """
-        from astropy.cosmology import z_at_value
         cosmology = get_cosmology(self.cosmology)
         limit_dict[self.name] = value
         if self.name == 'redshift':
@@ -209,6 +236,22 @@ class Cosmological(Interped):
             pass
 
     def get_corresponding_prior(self, name=None, unit=None):
+        """
+        Utility method to convert between equivalent redshift, comoving
+        distance, and luminosity distance priors.
+
+        Parameters
+        ----------
+        name: str
+            The name of the new prior, this should be one of
+            :code:`[luminosity_distance, comoving_distance, redshift]`.
+        unit: Union[str, astropy.units.Unit]
+            The unit of the output prior.
+
+        Returns
+        -------
+        The corresponding prior.
+        """
         subclass_args = infer_args_from_method(self.__init__)
         args_dict = {key: getattr(self, key) for key in subclass_args}
         self._convert_to(new=name, args_dict=args_dict)
@@ -249,23 +292,28 @@ class Cosmological(Interped):
         else:
             return cls._from_repr(string)
 
-    @property
-    def _repr_dict(self):
-        """
-        Get a dictionary containing the arguments needed to reproduce this object.
-        """
-        from astropy.cosmology.core import Cosmology
+    def get_instantiation_dict(self):
         from astropy import units
-        dict_with_properties = super(Cosmological, self)._repr_dict
-        if isinstance(dict_with_properties['cosmology'], Cosmology):
-            if dict_with_properties['cosmology'].name is not None:
-                dict_with_properties['cosmology'] = dict_with_properties['cosmology'].name
-        if isinstance(dict_with_properties['unit'], units.Unit):
-            dict_with_properties['unit'] = dict_with_properties['unit'].to_string()
-        return dict_with_properties
+        from astropy.cosmology.realizations import available
+        instantiation_dict = super().get_instantiation_dict()
+        if self.cosmology.name in available:
+            instantiation_dict['cosmology'] = self.cosmology.name
+        if isinstance(self.unit, units.Unit):
+            instantiation_dict['unit'] = self.unit.to_string()
+        return instantiation_dict
 
 
 class UniformComovingVolume(Cosmological):
+    r"""
+    Prior that is uniform in the comoving volume.
+
+    Note that this does not account for time dilation in the source frame
+    use `bilby.gw.prior.UniformSourceFrame` to include that effect.
+
+    .. math::
+
+        p(z) \propto \frac{d V_{c}}{dz}
+    """
 
     def _get_redshift_arrays(self):
         zs = np.linspace(self._minimum['redshift'] * 0.99,
@@ -275,12 +323,15 @@ class UniformComovingVolume(Cosmological):
 
 
 class UniformSourceFrame(Cosmological):
-    """
+    r"""
     Prior for redshift which is uniform in comoving volume and source frame
     time.
 
-    For redshift this is p(z) \propto dVc/dz 1 / (1 + z), where the extra 1+z
-    is due to doppler shifting of the source frame time.
+    .. math::
+
+        p(z) \propto \frac{1}{1 + z}\frac{dV_{c}}{dz}
+
+    The extra :math:`1+z` is due to doppler shifting of the source frame time.
     """
 
     def _get_redshift_arrays(self):
@@ -291,15 +342,25 @@ class UniformSourceFrame(Cosmological):
 
 
 class UniformInComponentsChirpMass(PowerLaw):
+    r"""
+    Prior distribution for chirp mass which is uniform in component masses.
+
+    This is useful when chirp mass and mass ratio are sampled while the
+    prior is uniform in component masses.
+
+    .. math::
+
+        p({\cal M}) \propto {\cal M}
+
+    Notes
+    -----
+    This prior is intended to be used in conjunction with the corresponding
+    :code:`bilby.gw.prior.UniformInComponentsMassRatio`.
+    """
 
     def __init__(self, minimum, maximum, name='chirp_mass',
-                 latex_label='$\mathcal{M}$', unit=None, boundary=None):
+                 latex_label=r'$\mathcal{M}$', unit=None, boundary=None):
         """
-        Prior distribution for chirp mass which is uniform in component masses.
-
-        This is useful when chirp mass and mass ratio are sampled while the
-        prior is uniform in component masses.
-
         Parameters
         ==========
         minimum : float
@@ -332,15 +393,25 @@ class WrappedInterp1d(interp1d):
 
 
 class UniformInComponentsMassRatio(Prior):
+    r"""
+    Prior distribution for chirp mass which is uniform in component masses.
+
+    This is useful when chirp mass and mass ratio are sampled while the
+    prior is uniform in component masses.
+
+    .. math::
+
+        p(q) \propto \frac{(1 + q)^{2/5}}{q^{6/5}}
+
+    Notes
+    -----
+    This prior is intended to be used in conjunction with the corresponding
+    :code:`bilby.gw.prior.UniformInComponentsChirpMass`.
+    """
 
     def __init__(self, minimum, maximum, name='mass_ratio', latex_label='$q$',
-                 unit=None, boundary=None):
+                 unit=None, boundary=None, equal_mass=False):
         """
-        Prior distribution for mass ratio which is uniform in component masses.
-
-        This is useful when chirp mass and mass ratio are sampled while the
-        prior is uniform in component masses.
-
         Parameters
         ==========
         minimum : float
@@ -351,7 +422,14 @@ class UniformInComponentsMassRatio(Prior):
         latex_label: see superclass
         unit: see superclass
         boundary: see superclass
+        equal_mass: bool
+            Whether the likelihood being considered is expected to peak at
+            equal masses. If True, the mapping described in Appendix A of
+            arXiv:2111.13619 is used in the :code:`rescale` method.
+            default=False
+
         """
+        self.equal_mass = equal_mass
         super(UniformInComponentsMassRatio, self).__init__(
             minimum=minimum, maximum=maximum, name=name,
             latex_label=latex_label, unit=unit, boundary=boundary)
@@ -369,6 +447,8 @@ class UniformInComponentsMassRatio(Prior):
         return (self._integral(val) - self._integral(self.minimum)) / self.norm
 
     def rescale(self, val):
+        if self.equal_mass:
+            val = 2 * np.minimum(val, 1 - val)
         resc = self.icdf(val)
         if resc.ndim == 0:
             return resc.item()
@@ -387,20 +467,26 @@ class UniformInComponentsMassRatio(Prior):
 
 
 class AlignedSpin(Interped):
+    r"""
+    Prior distribution for the aligned (z) component of the spin.
+
+    This takes prior distributions for the magnitude and cosine of the tilt
+    and forms a compound prior using a numerical convolution integral.
+
+    .. math::
+
+        \pi(\chi) = \int_{0}^{1} da \int_{-1}^{1} d\cos\theta
+        \pi(a) \pi(\cos\theta) \delta(\chi - a \cos\theta)
+
+    This is useful when using aligned-spin only waveform approximants.
+
+    This is an extension of e.g., (A7) of https://arxiv.org/abs/1805.10457.
+    """
 
     def __init__(self, a_prior=Uniform(0, 1), z_prior=Uniform(-1, 1),
                  name=None, latex_label=None, unit=None, boundary=None,
                  minimum=np.nan, maximum=np.nan):
         """
-        Prior distribution for the aligned (z) component of the spin.
-
-        This takes prior distributions for the magnitude and cosine of the tilt
-        and forms a compound prior.
-
-        This is useful when using aligned-spin only waveform approximants.
-
-        This is an extension of e.g., (A7) of https://arxiv.org/abs/1805.10457.
-
         Parameters
         ==========
         a_prior: Prior
@@ -436,8 +522,9 @@ class ConditionalChiUniformSpinMagnitude(ConditionalLogUniform):
     if the distribution of spin orientations is isotropic.
 
     .. math::
-        p(a) &= \frac{1}{a_{\max}}
-        p(\chi) &= - \frac{1}{2 a_{\max}} \ln(|\chi|)
+
+        p(a) &= \frac{1}{a_{\max}} \\
+        p(\chi) &= - \frac{\ln(|\chi|)}{2 a_{\max}}  \\
         p(a | \chi) &\propto \frac{1}{a}
     """
 
@@ -470,9 +557,10 @@ class ConditionalChiInPlane(ConditionalBasePrior):
     if the distribution of spin orientations is isotropic.
 
     .. math::
-        p(a) &= \frac{1}{a_{\max}}
-        p(\chi_\perp) = 2 N \chi_\perp / (\chi ** 2 + \chi_\perp ** 2)
-        N^{-1} &= 2 \ln(a_\max / |\chi|)
+
+        p(a) &= \frac{1}{a_{\max}} \\
+        p(\chi_\perp) &= \frac{2 N \chi_\perp}{\chi^2 + \chi_\perp^2} \\
+        N^{-1} &= 2 \ln\left(\frac{a_\max}{|\chi|}\right)
     """
 
     def __init__(self, minimum, maximum, name, latex_label=None, unit=None, boundary=None):
@@ -634,6 +722,18 @@ class CBCPriorDict(ConditionalPriorDict):
 
     @property
     def minimum_component_mass(self):
+        """
+        The minimum component mass allowed for the prior dictionary.
+
+        This property requires either:
+        * a prior for :code:`mass_2`
+        * priors for :code:`chirp_mass` and :code:`mass_ratio`
+
+        Returns
+        -------
+        mass_2: float
+            The minimum allowed component mass.
+        """
         if "mass_2" in self:
             return self["mass_2"].minimum
         if "chirp_mass" in self and "mass_ratio" in self:
@@ -647,8 +747,21 @@ class CBCPriorDict(ConditionalPriorDict):
             return None
 
     def is_nonempty_intersection(self, pset):
-        """ Check if keys in self exist in the PARAMETER_SETS pset """
-        if len(PARAMETER_SETS[pset].intersection(self.non_fixed_keys)) > 0:
+        """ Check if keys in self exist in the parameter set
+
+        Parameters
+        ----------
+        pset: str, set
+            Either a string referencing a parameter set in PARAMETER_SETS or
+            a set of keys
+        """
+        if isinstance(pset, str) and pset in PARAMETER_SETS:
+            check_set = PARAMETER_SETS[pset]
+        elif isinstance(pset, set):
+            check_set = pset
+        else:
+            raise ValueError(f"pset {pset} not understood")
+        if len(check_set.intersection(self.non_fixed_keys)) > 0:
             return True
         else:
             return False
@@ -664,6 +777,11 @@ class CBCPriorDict(ConditionalPriorDict):
         return self.is_nonempty_intersection("precession_only")
 
     @property
+    def measured_spin(self):
+        """ Return true if priors include any measured_spin parameters """
+        return self.is_nonempty_intersection("measured_spin")
+
+    @property
     def intrinsic(self):
         """ Return true if priors include any intrinsic parameters """
         return self.is_nonempty_intersection("intrinsic")
@@ -674,6 +792,16 @@ class CBCPriorDict(ConditionalPriorDict):
         return self.is_nonempty_intersection("extrinsic")
 
     @property
+    def sky(self):
+        """ Return true if priors include any extrinsic parameters """
+        return self.is_nonempty_intersection("sky")
+
+    @property
+    def distance_inclination(self):
+        """ Return true if priors include any extrinsic parameters """
+        return self.is_nonempty_intersection("distance_inclination")
+
+    @property
     def mass(self):
         """ Return true if priors include any mass parameters """
         return self.is_nonempty_intersection("mass")
@@ -682,6 +810,50 @@ class CBCPriorDict(ConditionalPriorDict):
     def phase(self):
         """ Return true if priors include phase parameters """
         return self.is_nonempty_intersection("phase")
+
+    def validate_prior(self, duration, minimum_frequency, N=1000, error=True, warning=False):
+        """ Validate the prior is suitable for use
+
+        Parameters
+        ==========
+        duration: float
+            The data duration in seconds
+        minimum_frequency: float
+            The minimum frequency in Hz of the analysis
+        N: int
+            The number of samples to draw when checking
+        error: bool
+            Whether to raise a ValueError on failure.
+        warning: bool
+            Whether to log a warning on failure.
+
+        Returns
+        =======
+        bool: whether the template will fit within the segment duration
+        """
+        samples = self.sample(N)
+        samples = generate_all_bbh_parameters(samples)
+        durations = np.array([
+            calculate_time_to_merger(
+                frequency=minimum_frequency,
+                mass_1=mass_1,
+                mass_2=mass_2,
+            )
+            for (mass_1, mass_2) in zip(samples["mass_1"], samples["mass_2"])
+        ])
+        longest_duration = max(durations)
+        if longest_duration < duration:
+            return True
+        message = (
+            "Prior contains regions of parameter space in which the signal"
+            f" is longer than the data duration {duration}s."
+            f" Maximum estimated duration = {longest_duration:.1f}s."
+        )
+        if warning:
+            logger.warning(message)
+            return False
+        if error:
+            raise ValueError(message)
 
 
 class BBHPriorDict(CBCPriorDict):
@@ -755,7 +927,7 @@ class BBHPriorDict(CBCPriorDict):
             Disable logging in this function call. Default is False.
 
         Returns
-        ======
+        =======
         redundant: bool
             Whether the key is redundant or not
         """
@@ -825,13 +997,15 @@ class BNSPriorDict(CBCPriorDict):
         Default parameter conversion function for BNS signals.
 
         This generates:
-        - the parameters passed to source.lal_binary_neutron_star
-        - all mass parameters
-        - all tidal parameters
+
+        * the parameters passed to source.lal_binary_neutron_star
+        * all mass parameters
+        * all tidal parameters
 
         It does not generate:
-        - component spins
-        - source-frame parameters
+
+        * component spins
+        * source-frame parameters
 
         Parameters
         ==========
@@ -852,8 +1026,8 @@ class BNSPriorDict(CBCPriorDict):
     def test_redundancy(self, key, disable_logging=False):
         logger.disabled = disable_logging
         logger.info("Performing redundancy check using BBHPriorDict(self).test_redundancy")
-        logger.disabled = False
         bbh_redundancy = BBHPriorDict(self).test_redundancy(key)
+        logger.disabled = False
 
         if bbh_redundancy:
             return True
@@ -887,43 +1061,49 @@ Prior._default_latex_labels = {
     'mass_1': '$m_1$',
     'mass_2': '$m_2$',
     'total_mass': '$M$',
-    'chirp_mass': '$\mathcal{M}$',
+    'chirp_mass': r'$\mathcal{M}$',
     'mass_ratio': '$q$',
-    'symmetric_mass_ratio': '$\eta$',
+    'symmetric_mass_ratio': r'$\eta$',
     'a_1': '$a_1$',
     'a_2': '$a_2$',
-    'tilt_1': '$\\theta_1$',
-    'tilt_2': '$\\theta_2$',
-    'cos_tilt_1': '$\cos\\theta_1$',
-    'cos_tilt_2': '$\cos\\theta_2$',
-    'phi_12': '$\Delta\phi$',
-    'phi_jl': '$\phi_{JL}$',
+    'tilt_1': r'$\theta_1$',
+    'tilt_2': r'$\theta_2$',
+    'cos_tilt_1': r'$\cos\theta_1$',
+    'cos_tilt_2': r'$\cos\theta_2$',
+    'phi_12': r'$\Delta\phi$',
+    'phi_jl': r'$\phi_{JL}$',
     'luminosity_distance': '$d_L$',
-    'dec': '$\mathrm{DEC}$',
-    'ra': '$\mathrm{RA}$',
-    'iota': '$\iota$',
-    'cos_iota': '$\cos\iota$',
-    'theta_jn': '$\\theta_{JN}$',
-    'cos_theta_jn': '$\cos\\theta_{JN}$',
-    'psi': '$\psi$',
-    'phase': '$\phi$',
+    'dec': r'$\mathrm{DEC}$',
+    'ra': r'$\mathrm{RA}$',
+    'iota': r'$\iota$',
+    'cos_iota': r'$\cos\iota$',
+    'theta_jn': r'$\theta_{JN}$',
+    'cos_theta_jn': r'$\cos\theta_{JN}$',
+    'psi': r'$\psi$',
+    'phase': r'$\phi$',
     'geocent_time': '$t_c$',
     'time_jitter': '$t_j$',
-    'lambda_1': '$\\Lambda_1$',
-    'lambda_2': '$\\Lambda_2$',
-    'lambda_tilde': '$\\tilde{\\Lambda}$',
-    'delta_lambda_tilde': '$\\delta\\tilde{\\Lambda}$',
-    'chi_1': '$\\chi_1$',
-    'chi_2': '$\\chi_2$',
-    'chi_1_in_plane': '$\\chi_{1, \perp}$',
-    'chi_2_in_plane': '$\\chi_{2, \perp}$',
+    'lambda_1': r'$\Lambda_1$',
+    'lambda_2': r'$\Lambda_2$',
+    'lambda_tilde': r'$\tilde{\Lambda}$',
+    'delta_lambda_tilde': r'$\delta\tilde{\Lambda}$',
+    'chi_1': r'$\chi_1$',
+    'chi_2': r'$\chi_2$',
+    'chi_1_in_plane': r'$\chi_{1, \perp}$',
+    'chi_2_in_plane': r'$\chi_{2, \perp}$',
 }
 
 
 class CalibrationPriorDict(PriorDict):
+    """
+    Prior dictionary class for calibration parameters.
+    This has methods for simplifying the creation of priors for the large
+    numbers of parameters used with the spline model.
+    """
 
     def __init__(self, dictionary=None, filename=None):
-        """ Initialises a Prior set for Binary Black holes
+        """
+        Initialises a Prior dictionary for calibration parameters
 
         Parameters
         ==========
@@ -1019,7 +1199,7 @@ class CalibrationPriorDict(PriorDict):
                                    boundary=boundary)
         for ii in range(n_nodes):
             name = "recalib_{}_phase_{}".format(label, ii)
-            latex_label = "$\\phi^{}_{}$".format(label, ii)
+            latex_label = r"$\phi^{}_{}$".format(label, ii)
             prior[name] = Gaussian(mu=phase_mean_nodes[ii],
                                    sigma=phase_sigma_nodes[ii],
                                    name=name, latex_label=latex_label,
@@ -1035,7 +1215,7 @@ class CalibrationPriorDict(PriorDict):
     @staticmethod
     def constant_uncertainty_spline(
             amplitude_sigma, phase_sigma, minimum_frequency, maximum_frequency,
-            n_nodes, label):
+            n_nodes, label, boundary="reflective"):
         """
         Make prior assuming constant in frequency calibration uncertainty.
 
@@ -1055,6 +1235,8 @@ class CalibrationPriorDict(PriorDict):
             Number of nodes for the spline.
         label: str
             Label for the names of the parameters, e.g., `recalib_H1_`
+        boundary: None, 'reflective', 'periodic'
+            The type of prior boundary to assign
 
         Returns
         =======
@@ -1077,14 +1259,14 @@ class CalibrationPriorDict(PriorDict):
             prior[name] = Gaussian(mu=amplitude_mean_nodes[ii],
                                    sigma=amplitude_sigma_nodes[ii],
                                    name=name, latex_label=latex_label,
-                                   boundary='reflective')
+                                   boundary=boundary)
         for ii in range(n_nodes):
             name = "recalib_{}_phase_{}".format(label, ii)
-            latex_label = "$\\phi^{}_{}$".format(label, ii)
+            latex_label = r"$\phi^{}_{}$".format(label, ii)
             prior[name] = Gaussian(mu=phase_mean_nodes[ii],
                                    sigma=phase_sigma_nodes[ii],
                                    name=name, latex_label=latex_label,
-                                   boundary='reflective')
+                                   boundary=boundary)
         for ii in range(n_nodes):
             name = "recalib_{}_frequency_{}".format(label, ii)
             latex_label = "$f^{}_{}$".format(label, ii)
@@ -1095,6 +1277,35 @@ class CalibrationPriorDict(PriorDict):
 
 
 def secondary_mass_condition_function(reference_params, mass_1):
+    """
+    Condition function to use for a prior that is conditional on the value
+    of the primary mass, for example, a prior on the secondary mass that is
+    bounded by the primary mass.
+
+    .. code-block:: python
+
+        import bilby
+        priors = bilby.gw.prior.CBCPriorDict()
+        priors["mass_1"] = bilby.core.prior.Uniform(5, 50)
+        priors["mass_2"] = bilby.core.prior.ConditionalUniform(
+            condition_func=bilby.gw.prior.secondary_mass_condition_function,
+            minimum=5,
+            maximum=50,
+        )
+
+    Parameters
+    ----------
+    reference_params: dict
+        Reference parameter dictionary, this should contain a "minimum"
+        attribute.
+    mass_1: float
+        The primary mass to use as the upper limit for the prior.
+
+    Returns
+    -------
+    dict:
+        Updated prior limits given the provided primary mass.
+    """
     return dict(minimum=reference_params['minimum'], maximum=mass_1)
 
 
@@ -1146,11 +1357,11 @@ class HealPixMapPriorDist(BaseJointPriorDist):
                 bounds.append([0, np.inf])
             self.distance = True
             self.prob, self.distmu, self.distsigma, self.distnorm = self.hp.read_map(
-                hp_file, verbose=False, field=range(4)
+                hp_file, field=range(4)
             )
         else:
             self.distance = False
-            self.prob = self.hp.read_map(hp_file, verbose=False)
+            self.prob = self.hp.read_map(hp_file)
 
         super(HealPixMapPriorDist, self).__init__(names=names, bounds=bounds)
         self.distname = "hpmap"
@@ -1162,7 +1373,6 @@ class HealPixMapPriorDist(BaseJointPriorDist):
         self._all_interped = interp1d(x=self.pix_xx, y=self.prob, bounds_error=False, fill_value=0)
         self.inverse_cdf = None
         self.distance_pdf = None
-        self.distance_dist = None
         self.distance_icdf = None
         self._build_attributes()
         name = self.names[-1]
@@ -1250,14 +1460,6 @@ class HealPixMapPriorDist(BaseJointPriorDist):
         ).pdf(r)
         pdfs = self.rs ** 2 * norm(loc=self.distmu[pix_idx], scale=self.distsigma[pix_idx]).pdf(self.rs)
         cdfs = np.cumsum(pdfs) / np.sum(pdfs)
-
-        def sample_distance(n):
-            gaussian = norm(loc=self.distmu[pix_idx], scale=self.distsigma[pix_idx]).rvs(size=100 * n)
-            probs = self._check_norm(gaussian[gaussian > 0] ** 2)
-            ds = np.random.choice(gaussian[gaussian > 0], p=probs, size=n, replace=True)
-            return ds
-
-        self.distance_dist = sample_distance
         self.distance_icdf = interp1d(cdfs, self.rs)
 
     @staticmethod
@@ -1301,7 +1503,7 @@ class HealPixMapPriorDist(BaseJointPriorDist):
         """
         pixel_choices = np.arange(self.npix)
         pixel_probs = self._check_norm(self.prob)
-        sample_pix = np.random.choice(pixel_choices, size=size, p=pixel_probs, replace=True)
+        sample_pix = random.rng.choice(pixel_choices, size=size, p=pixel_probs, replace=True)
         sample = np.empty((size, self.num_vars))
         for samp in range(size):
             theta, ra = self.hp.pix2ang(self.nside, sample_pix[samp])
@@ -1333,7 +1535,7 @@ class HealPixMapPriorDist(BaseJointPriorDist):
         """
         if self.distmu[pix] == np.inf or self.distmu[pix] <= 0:
             return 0
-        dist = self.distance_dist(1)
+        dist = self.distance_icdf(random.rng.uniform(0, 1))
         name = self.names[-1]
         if (dist > self.bounds[name][1]) | (dist < self.bounds[name][0]):
             self.draw_distance(pix)
@@ -1362,8 +1564,8 @@ class HealPixMapPriorDist(BaseJointPriorDist):
             self.draw_from_pixel(ra, dec, pix)
         return np.array(
             [
-                np.random.uniform(ra - self.pixel_length, ra + self.pixel_length),
-                np.random.uniform(dec - self.pixel_length, dec + self.pixel_length),
+                random.rng.uniform(ra - self.pixel_length, ra + self.pixel_length),
+                random.rng.uniform(dec - self.pixel_length, dec + self.pixel_length),
             ]
         )
 
@@ -1426,7 +1628,7 @@ class HealPixMapPriorDist(BaseJointPriorDist):
         return lnprob
 
     def __eq__(self, other):
-        skip_keys = ["_all_interped", "inverse_cdf", "distance_pdf", "distance_dist", "distance_icdf"]
+        skip_keys = ["_all_interped", "inverse_cdf", "distance_pdf", "distance_icdf"]
         if self.__class__ != other.__class__:
             return False
         if sorted(self.__dict__.keys()) != sorted(other.__dict__.keys()):
@@ -1457,7 +1659,29 @@ class HealPixMapPriorDist(BaseJointPriorDist):
 
 
 class HealPixPrior(JointPrior):
+    """
+    A prior distribution that follows a user-provided HealPix map for one
+    parameter.
+
+    See :code:`bilby.gw.prior.HealPixMapPriorDist` for more details of how to
+    instantiate the prior.
+    """
     def __init__(self, dist, name=None, latex_label=None, unit=None):
+        """
+
+        Parameters
+        ----------
+        dist: bilby.gw.prior.HealPixMapPriorDist
+            The base joint probability.
+        name: str
+            The name of the parameter, it should be contained in the map.
+            One of ["ra", "dec", "luminosity_distance"].
+        latex_label: str
+            Latex label used for plotting, will be read from default values if
+            not provided.
+        unit: str
+            The unit of the parameter.
+        """
         if not isinstance(dist, HealPixMapPriorDist):
             raise JointPriorDistError("dist object must be instance of HealPixMapPriorDist")
         super(HealPixPrior, self).__init__(dist=dist, name=name, latex_label=latex_label, unit=unit)

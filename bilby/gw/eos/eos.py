@@ -17,7 +17,7 @@ conversion_dict = {'pressure': {'cgs': C_SI ** 4. / G_SI * 10., 'si': C_SI ** 4.
                    'pseudo_enthalpy': {'dimensionless': 1.},
                    'mass': {'g': C_SI ** 2. / G_SI * 1000, 'kg': C_SI ** 2. / G_SI, 'geom': 1.,
                             'm_sol': C_SI ** 2. / G_SI / MSUN_SI},
-                   'radius': {'cm': 100., 'mass': 1., 'km': .001},
+                   'radius': {'cm': 100., 'm': 1., 'km': .001},
                    'tidal_deformability': {'geom': 1.}}
 
 
@@ -60,12 +60,12 @@ class TabularEOS(object):
         self.sampling_flag = sampling_flag
         self.warning_flag = warning_flag
 
-        if type(eos) == str:
+        if isinstance(eos, str):
             if eos in valid_eos_dict.keys():
                 table = np.loadtxt(valid_eos_dict[eos])
             else:
                 table = np.loadtxt(eos)
-        elif type(eos) == np.ndarray:
+        elif isinstance(eos, np.ndarray):
             table = eos
         else:
             raise ValueError("eos provided is invalid type please supply a str name, str path to ASCII file, "

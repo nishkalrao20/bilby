@@ -1,7 +1,6 @@
-from distutils.version import LooseVersion
-
 import numpy as np
 import pandas as pd
+from packaging import version
 
 from ..core.sampler.base_sampler import SamplerError
 from ..core.utils import logger
@@ -137,12 +136,14 @@ class Chain(object):
 
     @property
     def _random_idx(self):
+        from ..core.utils.random import rng
+
         mindex = self._last_minimum_index[1]
         # Check if mindex exceeds current position by 10 ACT: if so use a random sample
         # otherwise we draw only from the chain past the minimum_index
         if np.isinf(self.tau_last) or self.position - mindex < 10 * self.tau_last:
             mindex = 0
-        return np.random.randint(mindex, self.position + 1)
+        return rng.integers(mindex, self.position + 1)
 
     @property
     def random_sample(self):
@@ -158,7 +159,7 @@ class Chain(object):
 
     @property
     def minimum_index(self):
-        """This calculated a minimum index from which to discard samples
+        """This calculates a minimum index from which to discard samples
 
         A number of methods are provided for the calculation. A subset are
         switched off (by `if False` statements) for future development
@@ -253,7 +254,7 @@ class Chain(object):
 
     @property
     def tau(self):
-        """ The maximum ACT over all parameters """
+        """The maximum ACT over all parameters"""
 
         if self.position in self.max_tau_dict:
             # If we have the ACT at the current position, return it
@@ -272,7 +273,7 @@ class Chain(object):
 
     @property
     def tau_nocache(self):
-        """ Calculate tau forcing a recalculation (no cached tau) """
+        """Calculate tau forcing a recalculation (no cached tau)"""
         tau = max(self.tau_dict.values())
         self.max_tau_dict[self.position] = tau
         self.cached_tau_count = 0
@@ -280,7 +281,7 @@ class Chain(object):
 
     @property
     def tau_last(self):
-        """ Return the last-calculated tau if it exists, else inf """
+        """Return the last-calculated tau if it exists, else inf"""
         if len(self.max_tau_dict) > 0:
             return list(self.max_tau_dict.values())[-1]
         else:
@@ -288,7 +289,7 @@ class Chain(object):
 
     @property
     def _tau_for_full_chain(self):
-        """ The maximum ACT over all parameters """
+        """The maximum ACT over all parameters"""
         return max(self._tau_dict_for_full_chain.values())
 
     @property
@@ -297,11 +298,11 @@ class Chain(object):
 
     @property
     def tau_dict(self):
-        """ Calculate a dictionary of tau (ACT) for every parameter """
+        """Calculate a dictionary of tau (ACT) for every parameter"""
         return self._calculate_tau_dict(self.minimum_index)
 
     def _calculate_tau_dict(self, minimum_index):
-        """ Calculate a dictionary of tau (ACT) for every parameter """
+        """Calculate a dictionary of tau (ACT) for every parameter"""
         logger.debug(f"Calculating tau_dict {self}")
 
         # If there are too few samples to calculate tau
@@ -343,7 +344,12 @@ class Chain(object):
     @property
     def nsamples(self):
         nuseable_steps = self.position - self.minimum_index
-        return int(nuseable_steps / (self.thin_by_nact * self.tau))
+        n_independent_samples = nuseable_steps / self.tau
+        nsamples = int(n_independent_samples / self.thin_by_nact)
+        if nuseable_steps >= nsamples:
+            return nsamples
+        else:
+            return 0
 
     @property
     def nsamples_last(self):
@@ -408,12 +414,20 @@ class Chain(object):
         for ax, key in zip(axes[:, 1], self.keys):
             if all_samples is not None:
                 yy_all = all_samples[key]
-                ax.hist(yy_all, bins=50, alpha=0.6, density=True, color="k")
-
+                if np.any(np.isinf(yy_all)):
+                    logger.warning(
+                        f"Could not plot histogram for parameter {key} due to infinite values"
+                    )
+                else:
+                    ax.hist(yy_all, bins=50, alpha=0.6, density=True, color="k")
             yy = self.get_1d_array(key)[nburn : self.position : self.thin]
-            ax.hist(yy, bins=50, alpha=0.8, density=True)
-
-            ax.set_xlabel(self._get_plot_label_by_key(key, priors))
+            if np.any(np.isinf(yy)):
+                logger.warning(
+                    f"Could not plot histogram for parameter {key} due to infinite values"
+                )
+            else:
+                ax.hist(yy, bins=50, alpha=0.8, density=True)
+                ax.set_xlabel(self._get_plot_label_by_key(key, priors))
 
         # Add x-axes labels to the traceplots
         axes[-1, 0].set_xlabel(r"Iteration $[\times 10^{3}]$")
@@ -512,7 +526,7 @@ class Sample(object):
 def calculate_tau(x, autocorr_c=5):
     import emcee
 
-    if LooseVersion(emcee.__version__) < LooseVersion("3"):
+    if version.parse(emcee.__version__) < version.parse("3"):
         raise SamplerError("bilby-mcmc requires emcee > 3.0 for autocorr analysis")
 
     if np.all(np.diff(x) == 0):

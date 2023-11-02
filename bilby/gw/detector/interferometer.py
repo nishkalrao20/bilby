@@ -1,15 +1,19 @@
 import os
-import sys
 
 import numpy as np
-import scipy as sp
+from bilby_cython.geometry import (
+    get_polarization_tensor,
+    three_by_three_matrix_contraction,
+    time_delay_from_geocenter,
+)
 
 from ...core import utils
-from ...core.utils import docstring, logger, PropertyAccessor
+from ...core.utils import docstring, logger, PropertyAccessor, safe_file_dump
 from .. import utils as gwutils
 from .calibration import Recalibrate
 from .geometry import InterferometerGeometry
 from .strain_data import InterferometerStrainData
+from ..conversion import generate_all_bbh_parameters
 
 
 class Interferometer(object):
@@ -265,17 +269,23 @@ class Interferometer(object):
         psi: float
             binary polarisation angle counter-clockwise about the direction of propagation
         mode: str
-            polarisation mode (e.g. 'plus', 'cross')
+            polarisation mode (e.g. 'plus', 'cross') or the name of a specific detector.
+            If mode == self.name, return 1
 
         Returns
         =======
-        array_like: A 3x3 array representation of the antenna response for the specified mode
+        float: The antenna response for the specified mode and time/location
 
         """
-        polarization_tensor = gwutils.get_polarization_tensor(ra, dec, time, psi, mode)
-        return np.einsum('ij,ij->', self.geometry.detector_tensor, polarization_tensor)
+        if mode in ["plus", "cross", "x", "y", "breathing", "longitudinal"]:
+            polarization_tensor = get_polarization_tensor(ra, dec, time, psi, mode)
+            return three_by_three_matrix_contraction(self.geometry.detector_tensor, polarization_tensor)
+        elif mode == self.name:
+            return 1
+        else:
+            return 0
 
-    def get_detector_response(self, waveform_polarizations, parameters):
+    def get_detector_response(self, waveform_polarizations, parameters, frequencies=None):
         """ Get the detector response for a particular waveform
 
         Parameters
@@ -284,11 +294,21 @@ class Interferometer(object):
             polarizations of the waveform
         parameters: dict
             parameters describing position and time of arrival of the signal
-
+        frequencies: array-like, optional
+        The frequency values to evaluate the response at. If
+        not provided, the response is computed using
+        :code:`self.frequency_array`. If the frequencies are
+        specified, no frequency masking is performed.
         Returns
         =======
         array_like: A 3x3 array representation of the detector response (signal observed in the interferometer)
         """
+        if frequencies is None:
+            frequencies = self.frequency_array[self.frequency_mask]
+            mask = self.frequency_mask
+        else:
+            mask = np.ones(len(frequencies), dtype=bool)
+
         signal = {}
         for mode in waveform_polarizations.keys():
             det_response = self.antenna_response(
@@ -298,9 +318,7 @@ class Interferometer(object):
                 parameters['psi'], mode)
 
             signal[mode] = waveform_polarizations[mode] * det_response
-        signal_ifo = sum(signal.values())
-
-        signal_ifo *= self.strain_data.frequency_mask
+        signal_ifo = sum(signal.values()) * mask
 
         time_shift = self.time_delay_from_geocenter(
             parameters['ra'], parameters['dec'], parameters['geocent_time'])
@@ -310,58 +328,58 @@ class Interferometer(object):
         dt_geocent = parameters['geocent_time'] - self.strain_data.start_time
         dt = dt_geocent + time_shift
 
-        signal_ifo[self.strain_data.frequency_mask] = signal_ifo[self.strain_data.frequency_mask] * np.exp(
-            -1j * 2 * np.pi * dt * self.strain_data.frequency_array[self.strain_data.frequency_mask])
+        signal_ifo[mask] = signal_ifo[mask] * np.exp(-1j * 2 * np.pi * dt * frequencies)
 
-        signal_ifo[self.strain_data.frequency_mask] *= self.calibration_model.get_calibration_factor(
-            self.strain_data.frequency_array[self.strain_data.frequency_mask],
-            prefix='recalib_{}_'.format(self.name), **parameters)
+        signal_ifo[mask] *= self.calibration_model.get_calibration_factor(
+            frequencies, prefix='recalib_{}_'.format(self.name), **parameters
+        )
 
         return signal_ifo
 
-    def get_td_detector_response(self, waveform_polarizations, parameters):
-        """ Get the time domain detector response for a particular waveform
+    def check_signal_duration(self, parameters, raise_error=True):
+        """ Check that the signal with the given parameters fits in the data
 
         Parameters
         ==========
-        waveform_polarizations: dict
-            polarizations of the waveform
         parameters: dict
-            parameters describing position and time of arrival of the signal
-
-        Returns
-        =======
-        array_like: A 3x3 array representation of the detector response (signal observed in the interferometer)
+            A dictionary of the injection parameters
+        raise_error: bool
+            If True, raise an error in the signal does not fit. Otherwise, print
+            a warning message.
         """
-        signal = {}
-        for mode in waveform_polarizations.keys():
-            det_response = self.antenna_response(
-                parameters['ra'],
-                parameters['dec'],
-                parameters['geocent_time'],
-                parameters['psi'], mode)
+        try:
+            parameters = generate_all_bbh_parameters(parameters)
+        except AttributeError:
+            logger.debug(
+                "generate_all_bbh_parameters parameters failed during check_signal_duration"
+            )
+            return
 
-            signal[mode] = waveform_polarizations[mode] * det_response
-        signal_ifo = sum(signal.values())
+        if ("mass_1" not in parameters) and ("mass_2" not in parameters):
+            if raise_error:
+                raise AttributeError("Unable to check signal duration as mass not given")
+            else:
+                return
 
-        time_shift = self.time_delay_from_geocenter(
-            parameters['ra'], parameters['dec'], parameters['geocent_time'])
+        # Calculate the time to merger
+        deltaT = gwutils.calculate_time_to_merger(
+            frequency=self.minimum_frequency,
+            mass_1=parameters["mass_1"],
+            mass_2=parameters["mass_2"],
+        )
+        deltaT = np.round(deltaT, 1)
+        if deltaT > self.duration:
+            msg = (
+                f"The injected signal has a duration in-band of {deltaT}s, but "
+                f"the data for detector {self.name} has a duration of {self.duration}s"
+            )
+            if raise_error:
+                raise ValueError(msg)
+            else:
+                logger.warning(msg)
 
-        # Be careful to first subtract the two GPS times which are ~1e9 sec.
-        # And then add the time_shift which varies at ~1e-5 sec
-        dt_geocent = parameters['geocent_time'] - self.strain_data.start_time
-        dt = dt_geocent + time_shift
-
-        signal_ifo = signal_ifo * np.exp(-1j * 2 * np.pi * dt * self.strain_data.time_array)
-
-        signal_ifo *= self.calibration_model.get_calibration_factor(
-            self.strain_data.time_array,
-            prefix='recalib_{}_'.format(self.name), **parameters)
-
-        return signal_ifo
-        
     def inject_signal(self, parameters, injection_polarizations=None,
-                      waveform_generator=None):
+                      waveform_generator=None, raise_error=True):
         """ General signal injection method.
         Provide the injection parameters and either the injection polarizations
         or the waveform generator to inject a signal into the detector.
@@ -379,6 +397,10 @@ class Interferometer(object):
         waveform_generator: bilby.gw.waveform_generator.WaveformGenerator, optional
             A WaveformGenerator instance using the source model to inject. If
             `injection_polarizations` is given, this will be ignored.
+        raise_error: bool
+            If true, raise an error if the injected signal has a duration
+            longer than the data duration. If False, a warning will be printed
+            instead.
 
         Notes
         =====
@@ -393,6 +415,8 @@ class Interferometer(object):
             if it was passed in. Otherwise it is the return value of waveform_generator.frequency_domain_strain().
 
         """
+        self.check_signal_duration(parameters, raise_error)
+
         if injection_polarizations is None and waveform_generator is None:
             raise ValueError(
                 "inject_signal needs one of waveform_generator or "
@@ -497,34 +521,6 @@ class Interferometer(object):
                 frequency_array=self.strain_data.frequency_array) *
             self.strain_data.window_factor)
 
-    @property
-    def acf(self):
-        """Returns the auto correlation function
-
-        Returns
-        =======
-        array_like: An array representation of the auto correlation function
-        
-        """
-
-        power_spectral_density = self.power_spectral_density_array
-        power_spectral_density[power_spectral_density == np.inf] = 0
-        return 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
-            
-    @property
-    def covariance_matrix(self):
-        """Returns the noise correlation matrix
-
-        Returns
-        =======
-        array_like: An array representation of the noise correlation matrix
-        
-        """
-        power_spectral_density = self.power_spectral_density_array
-        power_spectral_density[power_spectral_density == np.inf] = 0
-        acf = 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
-        return sp.linalg.toeplitz(acf)
-
     def unit_vector_along_arm(self, arm):
         logger.warning("This method has been moved and will be removed in the future."
                        "Use Interferometer.geometry.unit_vector_along_arm instead.")
@@ -549,7 +545,7 @@ class Interferometer(object):
         =======
         float: The time delay from geocenter in seconds
         """
-        return gwutils.time_delay_geocentric(self.geometry.vertex, np.array([0, 0, 0]), ra, dec, time)
+        return time_delay_from_geocenter(self.geometry.vertex, ra, dec, time)
 
     def vertex_position_geocentric(self):
         """
@@ -583,23 +579,6 @@ class Interferometer(object):
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
             duration=self.strain_data.duration)
 
-    def td_optimal_snr_squared(self, signal):
-        """
-
-        Parameters
-        ==========
-        signal: array_like
-            Array containing the signal
-
-        Returns
-        =======
-        float: The optimal signal to noise ratio possible squared
-        """
-        return gwutils.td_optimal_snr_squared(
-            signal=signal,
-            acf=self.acf,
-            duration=self.strain_data.duration)
-
     def inner_product(self, signal):
         """
 
@@ -618,24 +597,6 @@ class Interferometer(object):
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
             duration=self.strain_data.duration)
 
-    def td_inner_product(self, signal):
-        """
-
-        Parameters
-        ==========
-        signal: array_like
-            Array containing the signal
-
-        Returns
-        =======
-        float: The optimal signal to noise ratio possible squared
-        """
-        return gwutils.td_noise_weighted_inner_product(
-            aa=signal,
-            bb=self.strain_data.time_domain_strain,
-            acf=self.acf,
-            duration=self.strain_data.duration)
-    
     def matched_filter_snr(self, signal):
         """
 
@@ -657,16 +618,25 @@ class Interferometer(object):
 
     @property
     def whitened_frequency_domain_strain(self):
-        """ Calculates the whitened data by dividing data by the amplitude spectral density
+        """ Calculates the whitened data by dividing the frequency domain data by
+        ((amplitude spectral density) * (duration / 4) ** 0.5). The resulting
+        data will have unit variance.
 
         Returns
         =======
         array_like: The whitened data
         """
-        return self.strain_data.frequency_domain_strain / self.amplitude_spectral_density_array
+        return self.strain_data.frequency_domain_strain / (
+            self.amplitude_spectral_density_array * np.sqrt(self.duration / 4)
+        )
 
     def save_data(self, outdir, label=None):
-        """ Creates a save file for the data in plain text format
+        """ Creates save files for interferometer data in plain text format.
+
+        Saves two files: the frequency domain strain data with three columns [f, real part of h(f),
+        imaginary part of h(f)], and the amplitude spectral density with two columns [f, ASD(f)].
+
+        Note that in v1.3.0 and below, the ASD was saved in a file called *_psd.dat.
 
         Parameters
         ==========
@@ -677,10 +647,10 @@ class Interferometer(object):
         """
 
         if label is None:
-            filename_psd = '{}/{}_psd.dat'.format(outdir, self.name)
+            filename_asd = '{}/{}_asd.dat'.format(outdir, self.name)
             filename_data = '{}/{}_frequency_domain_data.dat'.format(outdir, self.name)
         else:
-            filename_psd = '{}/{}_{}_psd.dat'.format(outdir, self.name, label)
+            filename_asd = '{}/{}_{}_asd.dat'.format(outdir, self.name, label)
             filename_data = '{}/{}_{}_frequency_domain_data.dat'.format(outdir, self.name, label)
         np.savetxt(filename_data,
                    np.array(
@@ -688,7 +658,7 @@ class Interferometer(object):
                         self.strain_data.frequency_domain_strain.real,
                         self.strain_data.frequency_domain_strain.imag]).T,
                    header='f real_h(f) imag_h(f)')
-        np.savetxt(filename_psd,
+        np.savetxt(filename_asd,
                    np.array(
                        [self.strain_data.frequency_array,
                         self.amplitude_spectral_density_array]).T,
@@ -829,46 +799,12 @@ class Interferometer(object):
     """
 
     @docstring(_save_ifo_docstring.format(
-        format="hdf5", extra=""".. deprecated:: 1.1.0
-    Use :func:`to_pickle` instead."""
-    ))
-    def to_hdf5(self, outdir='outdir', label=None):
-        import deepdish
-        if sys.version_info[0] < 3:
-            raise NotImplementedError('Pickling of Interferometer is not supported in Python 2.'
-                                      'Use Python 3 instead.')
-        if label is None:
-            label = self.name
-        utils.check_directory_exists_and_if_not_mkdir('outdir')
-        try:
-            filename = self._filename_from_outdir_label_extension(outdir, label, "h5")
-            deepdish.io.save(filename, self)
-        except AttributeError:
-            logger.warning("Saving to hdf5 using deepdish failed. Pickle dumping instead.")
-            self.to_pickle(outdir=outdir, label=label)
-
-    @classmethod
-    @docstring(_load_docstring.format(format="hdf5"))
-    def from_hdf5(cls, filename=None):
-        import deepdish
-        if sys.version_info[0] < 3:
-            raise NotImplementedError('Pickling of Interferometer is not supported in Python 2.'
-                                      'Use Python 3 instead.')
-
-        res = deepdish.io.load(filename)
-        if res.__class__ != cls:
-            raise TypeError('The loaded object is not an Interferometer')
-        return res
-
-    @docstring(_save_ifo_docstring.format(
         format="pickle", extra=".. versionadded:: 1.1.0"
     ))
     def to_pickle(self, outdir="outdir", label=None):
-        import dill
         utils.check_directory_exists_and_if_not_mkdir('outdir')
         filename = self._filename_from_outdir_label_extension(outdir, label, extension="pkl")
-        with open(filename, "wb") as ff:
-            dill.dump(self, ff)
+        safe_file_dump(self, filename, "dill")
 
     @classmethod
     @docstring(_load_docstring.format(format="pickle"))

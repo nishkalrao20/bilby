@@ -1,3 +1,4 @@
+import math
 from numbers import Number
 import numpy as np
 from scipy.interpolate import interp2d
@@ -243,10 +244,36 @@ class UnsortedInterp2d(interp2d):
         if isinstance(y, np.ndarray) and y.size == 1:
             y = float(y)
         if isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
+            original_shapes = (x.shape, y.shape)
             if x.shape != y.shape:
-                raise ValueError("UnsortedInterp2d received unequally shaped arrays")
+                while x.ndim > y.ndim:
+                    y = np.expand_dims(y, -1)
+                while y.ndim > x.ndim:
+                    x = np.expand_dims(x, -1)
+            try:
+                x = x * np.ones(y.shape)
+                y = y * np.ones(x.shape)
+            except ValueError:
+                raise ValueError(
+                    f"UnsortedInterp2d received incompatibly shaped arrays: {original_shapes}"
+                )
         elif isinstance(x, np.ndarray) and not isinstance(y, np.ndarray):
             y = y * np.ones_like(x)
         elif not isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
             x = x * np.ones_like(y)
         return x, y
+
+
+def round_up_to_power_of_two(x):
+    """Round up to the next power of two
+
+    Parameters
+    ----------
+    x: float
+
+    Returns
+    -------
+    float: next power of two
+
+    """
+    return 2**math.ceil(np.log2(x))

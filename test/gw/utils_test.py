@@ -8,6 +8,7 @@ import lalsimulation as lalsim
 from gwpy.timeseries import TimeSeries
 from gwpy.detector import Channel
 from scipy.stats import ks_2samp
+import pytest
 
 import bilby
 from bilby.gw import utils as gwutils
@@ -35,34 +36,6 @@ class TestGWUtils(unittest.TestCase):
         df = 0.1
         psd = gwutils.psd_from_freq_series(freq_data, df)
         self.assertTrue(np.all(psd == (freq_data * 2 * df ** 0.5) ** 2))
-
-    def test_time_delay_from_geocenter(self):
-        """
-        The difference in the two detector case is due to rounding error.
-        Different hardware gives different numbers in the last decimal place.
-        """
-        det1 = np.array([0.1, 0.2, 0.3])
-        det2 = np.array([0.1, 0.2, 0.5])
-        ra = 0.5
-        dec = 0.2
-        time = 10
-        self.assertEqual(gwutils.time_delay_geocentric(det1, det1, ra, dec, time), 0)
-        self.assertAlmostEqual(
-            gwutils.time_delay_geocentric(det1, det2, ra, dec, time),
-            1.3253791114055397e-10,
-            14,
-        )
-
-    def test_get_polarization_tensor(self):
-        ra = 1
-        dec = 2.0
-        time = 10
-        psi = 0.1
-        for mode in ["plus", "cross", "breathing", "longitudinal", "x", "y"]:
-            p = gwutils.get_polarization_tensor(ra, dec, time, psi, mode)
-            self.assertEqual(p.shape, (3, 3))
-        with self.assertRaises(ValueError):
-            gwutils.get_polarization_tensor(ra, dec, time, psi, "not-a-mode")
 
     def test_inner_product(self):
         aa = np.array([1, 2, 3])
@@ -100,24 +73,21 @@ class TestGWUtils(unittest.TestCase):
         )
         self.assertEqual(mfsnr, 25.510869054168282)
 
+    @pytest.mark.skip(reason="GWOSC unstable: avoiding this test")
     def test_get_event_time(self):
+        from urllib3.exceptions import NewConnectionError
         events = [
             "GW150914",
-            "GW151012",
-            "GW151226",
             "GW170104",
-            "GW170608",
-            "GW170729",
-            "GW170809",
-            "GW170814",
-            "GW170817",
-            "GW170818",
-            "GW170823",
         ]
         for event in events:
-            self.assertTrue(isinstance(gwutils.get_event_time(event), float))
+            try:
+                self.assertTrue(isinstance(gwutils.get_event_time(event), float))
+            except NewConnectionError:
+                return
 
-        self.assertTrue(gwutils.get_event_time("GW010290") is None)
+        with self.assertRaises(ValueError):
+            gwutils.get_event_time("GW010290")
 
     def test_read_frame_file(self):
         start_time = 0
@@ -136,7 +106,7 @@ class TestGWUtils(unittest.TestCase):
         strain = gwutils.read_frame_file(
             filename, start_time=None, end_time=None, channel=channel
         )
-        self.assertEqual(strain.channel.name, channel)
+        self.assertEqual(strain.name, channel)
         self.assertTrue(np.all(strain.value == data[:-1]))
 
         # Check reading with time limits
