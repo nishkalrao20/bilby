@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+import scipy as sp
 from bilby_cython.geometry import (
     get_polarization_tensor,
     three_by_three_matrix_contraction,
@@ -42,6 +43,7 @@ class Interferometer(object):
     minimum_frequency = PropertyAccessor('strain_data', 'minimum_frequency')
     maximum_frequency = PropertyAccessor('strain_data', 'maximum_frequency')
     frequency_mask = PropertyAccessor('strain_data', 'frequency_mask')
+    time_mask = PropertyAccessor('strain_data', 'time_mask')
     frequency_domain_strain = PropertyAccessor('strain_data', 'frequency_domain_strain')
     time_domain_strain = PropertyAccessor('strain_data', 'time_domain_strain')
 
@@ -336,6 +338,57 @@ class Interferometer(object):
 
         return signal_ifo
 
+    def get_td_detector_response(self, waveform_polarizations, parameters, times=None):
+        """ Get the time domain detector response for a particular waveform
+
+        Parameters
+        ==========
+        waveform_polarizations: dict
+            polarizations of the waveform
+        parameters: dict
+            parameters describing position and time of arrival of the signal
+        times: array-like, optional
+        The time values to evaluate the response at. If
+        not provided, the response is computed using
+        :code:`self.time_array`. If the frequencies are
+        specified, no frequency masking is performed.
+        Returns
+        =======
+        array_like: A 3x3 array representation of the detector response (signal observed in the interferometer)
+        """
+        if times is None:
+            times = self.time_array[self.time_mask]
+            mask = self.time_mask
+        else:
+            mask = np.ones(len(times), dtype=bool)
+
+        signal = {}
+        for mode in waveform_polarizations.keys():
+            det_response = self.antenna_response(
+                parameters['ra'],
+                parameters['dec'],
+                parameters['geocent_time'],
+                parameters['psi'], mode)
+
+            signal[mode] = waveform_polarizations[mode] * det_response
+        signal_ifo = sum(signal.values()) * mask
+
+        time_shift = self.time_delay_from_geocenter(
+            parameters['ra'], parameters['dec'], parameters['geocent_time'])
+
+        # Be careful to first subtract the two GPS times which are ~1e9 sec.
+        # And then add the time_shift which varies at ~1e-5 sec
+        dt_geocent = parameters['geocent_time'] - self.strain_data.start_time
+        dt = dt_geocent + time_shift
+        
+        signal_ifo[mask] = np.roll(signal_ifo[mask], int(dt / (times[1]-times[0])))
+
+        signal_ifo[mask] *= self.calibration_model.get_calibration_factor(
+            times, prefix='recalib_{}_'.format(self.name), **parameters
+        )
+
+        return signal_ifo
+    
     def check_signal_duration(self, parameters, raise_error=True):
         """ Check that the signal with the given parameters fits in the data
 
@@ -521,6 +574,34 @@ class Interferometer(object):
                 frequency_array=self.strain_data.frequency_array) *
             self.strain_data.window_factor)
 
+    @property
+    def acf(self):
+        """Returns the auto correlation function (ACF)
+
+        Returns
+        =======
+        array_like: An array representation of the auto correlation function
+        
+        """
+
+        power_spectral_density = self.power_spectral_density_array
+        power_spectral_density[power_spectral_density == np.inf] = 0
+        return 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
+            
+    @property
+    def covariance_matrix(self):
+        """Returns the noise correlation matrix
+
+        Returns
+        =======
+        array_like: An array representation of the noise correlation matrix
+        
+        """
+        power_spectral_density = self.power_spectral_density_array
+        power_spectral_density[power_spectral_density == np.inf] = 0
+        acf = 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
+        return sp.linalg.toeplitz(acf)
+    
     def unit_vector_along_arm(self, arm):
         logger.warning("This method has been moved and will be removed in the future."
                        "Use Interferometer.geometry.unit_vector_along_arm instead.")
@@ -579,6 +660,23 @@ class Interferometer(object):
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
             duration=self.strain_data.duration)
 
+    def td_optimal_snr_squared(self, signal):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+
+        Returns
+        =======
+        float: The optimal signal to noise ratio possible squared
+        """
+        return gwutils.td_optimal_snr_squared(
+            signal=signal[self.strain_data.time_mask],
+            acf=self.acf[self.strain_data.time_mask],
+            duration=self.strain_data.duration)
+    
     def inner_product(self, signal):
         """
 
@@ -597,6 +695,24 @@ class Interferometer(object):
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
             duration=self.strain_data.duration)
 
+    def td_inner_product(self, signal):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+
+        Returns
+        =======
+        float: The optimal signal to noise ratio possible squared
+        """
+        return gwutils.td_noise_weighted_inner_product(
+            aa=signal[self.strain_data.time_mask],
+            bb=self.strain_data.time_domain_strain[self.strain_data.time_mask],
+            acf=self.acf[self.strain_data.time_mask],
+            duration=self.strain_data.duration)
+    
     def matched_filter_snr(self, signal):
         """
 

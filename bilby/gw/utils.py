@@ -223,6 +223,9 @@ def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
 
 def optimal_snr_squared(signal, power_spectral_density, duration):
     """
+    Compute the square of the optimal matched filter SNR for the provided
+    signal.
+
 
     Parameters
     ==========
@@ -494,8 +497,7 @@ def read_frame_file(file_name, start_time, end_time, resample=None, channel=None
 
     if loaded:
         if resample and (strain.sample_rate.value != resample):
-            strain.resample(resample)
-        return strain
+            return strain.resample(resample)
     else:
         logger.warning('No data loaded.')
         return None
