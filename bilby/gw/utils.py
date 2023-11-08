@@ -3,6 +3,7 @@ import os
 from functools import lru_cache
 
 import numpy as np
+import scipy as sp
 from scipy.interpolate import interp1d
 from scipy.special import i0e
 from bilby_cython.geometry import (
