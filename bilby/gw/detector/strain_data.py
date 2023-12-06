@@ -46,8 +46,6 @@ class InterferometerStrainData(object):
 
         self._frequency_mask_updated = False
         self._frequency_mask = None
-        self._time_mask_updated = False
-        self._time_mask = None
         self._frequency_domain_strain = None
         self._time_domain_strain = None
         self._channel = None
@@ -55,8 +53,6 @@ class InterferometerStrainData(object):
     def __eq__(self, other):
         if self.minimum_frequency == other.minimum_frequency \
                 and self.maximum_frequency == other.maximum_frequency \
-                and self.minimum_time == other.minimum_time \
-                and self.maximum_time == other.maximum_time \
                 and self.roll_off == other.roll_off \
                 and self.window_factor == other.window_factor \
                 and self.sampling_frequency == other.sampling_frequency \
@@ -115,24 +111,6 @@ class InterferometerStrainData(object):
         self._frequency_mask_updated = False
 
     @property
-    def minimum_time(self):
-        return self.start_time
-
-    @property
-    def maximum_time(self):
-        return self.start_time + self.duration
-
-    @minimum_time.setter
-    def minimum_time(self):
-        self._minimum_time = self.start_time
-        self._time_mask_updated = False
-
-    @maximum_time.setter
-    def maximum_time(self):
-        self._maximum_time = self.start_time + self.duration
-        self._time_mask_updated = False
-        
-    @property
     def notch_list(self):
         return self._notch_list
 
@@ -175,33 +153,11 @@ class InterferometerStrainData(object):
             self._frequency_mask = mask
             self._frequency_mask_updated = True
         return self._frequency_mask
-    
-    @property
-    def time_mask(self):
-        """ Masking array for limiting the time domain.
-
-        Returns
-        =======
-        mask: np.ndarray
-            An array of boolean values
-        """
-        if not self._time_mask_updated:
-            time_array = self._times_and_frequencies.time_array
-            mask = ((time_array >= self.minimum_time) &
-                    (time_array <= self.maximum_time))
-            self._time_mask = mask
-            self._time_mask_updated = True
-        return self._time_mask
 
     @frequency_mask.setter
     def frequency_mask(self, mask):
         self._frequency_mask = mask
         self._frequency_mask_updated = True
-
-    @time_mask.setter
-    def time_mask(self, mask):
-        self._time_mask = mask
-        self._time_mask_updated = True
 
     @property
     def alpha(self):
@@ -240,11 +196,11 @@ class InterferometerStrainData(object):
     def time_domain_strain(self):
         """ The time domain strain, in units of strain """
         if self._time_domain_strain is not None:
-            return self._time_domain_strain * self.time_mask
+            return self._time_domain_strain
         elif self._frequency_domain_strain is not None:
             self._time_domain_strain = utils.infft(
                 self.frequency_domain_strain, self.sampling_frequency)
-            return self._time_domain_strain * self.time_mask
+            return self._time_domain_strain
 
         else:
             raise ValueError("time domain strain data not yet set")
