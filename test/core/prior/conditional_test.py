@@ -473,33 +473,5 @@ class TestDirichletPrior(unittest.TestCase):
         self.assertEqual(self.priors, test)
 
 
-class TestDirichletPrior(unittest.TestCase):
-
-    def setUp(self):
-        self.priors = bilby.core.prior.DirichletPriorDict(5)
-
-    def tearDown(self):
-        if os.path.isdir("priors"):
-            shutil.rmtree("priors")
-
-    def test_samples_sum_to_less_than_one(self):
-        """
-        Test that the samples sum to less than one as required for the
-        Dirichlet distribution.
-        """
-        samples = pd.DataFrame(self.priors.sample(10000)).values
-        self.assertLess(max(np.sum(samples, axis=1)), 1)
-
-    def test_read_write_file(self):
-        self.priors.to_file(outdir="priors", label="test")
-        test = bilby.core.prior.PriorDict(filename="priors/test.prior")
-        self.assertEqual(self.priors, test)
-
-    def test_read_write_json(self):
-        self.priors.to_json(outdir="priors", label="test")
-        test = bilby.core.prior.PriorDict.from_json(filename="priors/test_prior.json")
-        self.assertEqual(self.priors, test)
-
-
 if __name__ == "__main__":
     unittest.main()

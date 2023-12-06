@@ -2,7 +2,6 @@
 
 FROM containers.ligo.org/docker/base:conda
 LABEL name="bilby CI testing" \
-
 maintainer="Gregory Ashton <gregory.ashton@ligo.org>, Colm Talbot <colm.talbot@ligo.org>"
 
 COPY env-template.yml env.yml
@@ -26,7 +25,6 @@ RUN apt-get install -y gfortran
 
 RUN git clone https://github.com/PolyChord/PolyChordLite.git \
 && (cd PolyChordLite && python setup.py --no-mpi install)
-
 
 # Add the ROQ data to the image
 RUN mkdir roq_basis \
