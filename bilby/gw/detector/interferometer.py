@@ -92,7 +92,7 @@ class Interferometer(object):
         self.strain_data = InterferometerStrainData(
             minimum_frequency=minimum_frequency,
             maximum_frequency=maximum_frequency)
-        self.meta_data = dict()
+        self.meta_data = dict(name=name)
 
     def __eq__(self, other):
         if self.name == other.name and \
@@ -389,6 +389,48 @@ class Interferometer(object):
 
         return signal_ifo
     
+    def check_signal_duration(self, parameters, raise_error=True):
+        """ Check that the signal with the given parameters fits in the data
+
+        Parameters
+        ==========
+        parameters: dict
+            A dictionary of the injection parameters
+        raise_error: bool
+            If True, raise an error in the signal does not fit. Otherwise, print
+            a warning message.
+        """
+        try:
+            parameters = generate_all_bbh_parameters(parameters)
+        except AttributeError:
+            logger.debug(
+                "generate_all_bbh_parameters parameters failed during check_signal_duration"
+            )
+            return
+
+        if ("mass_1" not in parameters) and ("mass_2" not in parameters):
+            if raise_error:
+                raise AttributeError("Unable to check signal duration as mass not given")
+            else:
+                return
+
+        # Calculate the time to merger
+        deltaT = gwutils.calculate_time_to_merger(
+            frequency=self.minimum_frequency,
+            mass_1=parameters["mass_1"],
+            mass_2=parameters["mass_2"],
+        )
+        deltaT = np.round(deltaT, 1)
+        if deltaT > self.duration:
+            msg = (
+                f"The injected signal has a duration in-band of {deltaT}s, but "
+                f"the data for detector {self.name} has a duration of {self.duration}s"
+            )
+            if raise_error:
+                raise ValueError(msg)
+            else:
+                logger.warning(msg)
+
     def check_signal_duration(self, parameters, raise_error=True):
         """ Check that the signal with the given parameters fits in the data
 

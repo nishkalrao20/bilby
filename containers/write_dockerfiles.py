@@ -26,5 +26,4 @@ for python_major_version, python_minor_version in python_versions:
             date=today,
             python_major_version=python_major_version,
             python_minor_version=python_minor_version,
-            conda_samplers=" ".join(samplers)
         ))

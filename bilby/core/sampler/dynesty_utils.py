@@ -69,6 +69,7 @@ class LivePointSampler(UnitCubeSampler):
         i = self.rstate.integers(self.nlive)
         u = self.live_u[i, :]
         return u, np.identity(self.npdim)
+        return u, np.identity(self.ncdim)
 
 
 class MultiEllipsoidLivePointSampler(MultiEllipsoidSampler):
