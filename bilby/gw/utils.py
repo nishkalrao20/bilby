@@ -138,6 +138,25 @@ def noise_weighted_inner_product(aa, bb, power_spectral_density, duration):
     return 4 / duration * np.sum(integrand)
 
 
+def solving_toeplitz(aa, acf):
+    """
+    Calculate the inverse of a Toeplitz matrix using Levinson recursion.
+
+    Parameters
+    ==========
+    aa: array_like
+        Time series array
+    acf: array_like
+        Autocorrelation function of the noise
+
+    Returns
+    =======
+    Inverse of the Toeplitz matrix product with aa.
+    """
+
+    return sp.linalg.solve_toeplitz(acf[:len(aa)], aa, check_finite=False)
+
+
 def td_noise_weighted_inner_product(aa, bb, acf, duration):
     """
     Calculate the noise weighted inner product between two arrays.
@@ -145,9 +164,9 @@ def td_noise_weighted_inner_product(aa, bb, acf, duration):
     Parameters
     ==========
     aa: array_like
-        Array to be complex conjugated
+        Array 
     bb: array_like
-        Array not to be complex conjugated
+        Array 
     acf: array_like
         Autocorrelation function of the noise
     duration: float
@@ -158,8 +177,8 @@ def td_noise_weighted_inner_product(aa, bb, acf, duration):
     Noise-weighted inner product.
     """
 
-    ow = sp.linalg.solve_toeplitz(acf[:len(aa)], aa)
-    return np.dot(ow, bb)/np.sqrt(np.dot(aa, ow))
+    ow = solving_toeplitz(aa, acf)
+    return 4 / duration * np.convolve(ow, bb, 'valid')[0]/np.sqrt(np.convolve(aa, ow, 'valid')[0])
 
 
 def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, duration):
@@ -195,7 +214,7 @@ def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, 
 def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
     """
     Calculate the _complex_ matched filter snr of a signal.
-    This is <signal|frequency_domain_strain> / optimal_snr
+    This is <signal|time_domain_strain> / optimal_snr
 
     Parameters
     ==========
@@ -213,12 +232,11 @@ def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
     float: The matched filter signal to noise ratio squared
 
     """
-    rho_mf = td_noise_weighted_inner_product(
-        aa=signal, bb=time_domain_strain,
-        acf=acf, duration=duration)
-    rho_mf /= td_optimal_snr_squared(
-        signal=signal, acf=acf,
-        duration=duration)**0.5
+
+    ow = solving_toeplitz(signal, acf)
+    rho_mf = 4 / duration * np.convolve(ow, time_domain_strain, 'valid')[0]/np.sqrt(np.convolve(signal, ow, 'valid')[0])
+    rho_mf /= (4 / duration * np.convolve(signal, signal, 'valid')[0]/np.sqrt(np.convolve(signal, ow, 'valid')[0]))**0.5
+
     return rho_mf
 
 

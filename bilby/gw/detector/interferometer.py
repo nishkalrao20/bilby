@@ -583,11 +583,10 @@ class Interferometer(object):
         array_like: An array representation of the auto correlation function
         
         """
-
-        power_spectral_density = self.power_spectral_density_array
-        power_spectral_density[power_spectral_density == np.inf] = 0
-        return 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
-            
+        power_spectral_density_array = self.power_spectral_density_array
+        power_spectral_density_array[np.isinf(power_spectral_density_array)] = 0
+        return 0.5*np.fft.irfft(power_spectral_density_array) * self.strain_data.sampling_frequency
+                
     @property
     def covariance_matrix(self):
         """Returns the noise correlation matrix
@@ -597,10 +596,7 @@ class Interferometer(object):
         array_like: An array representation of the noise correlation matrix
         
         """
-        power_spectral_density = self.power_spectral_density_array
-        power_spectral_density[power_spectral_density == np.inf] = 0
-        acf = 0.5*np.fft.irfft(power_spectral_density)/self.strain_data.duration
-        return sp.linalg.toeplitz(acf)
+        return sp.linalg.toeplitz(self.acf)
     
     def unit_vector_along_arm(self, arm):
         logger.warning("This method has been moved and will be removed in the future."

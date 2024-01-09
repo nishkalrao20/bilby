@@ -1399,7 +1399,7 @@ class TDGravitationalWaveTransient(Likelihood):
         elif self.time_marginalization and self.calibration_marginalization:
 
             d_inner_h_integrand = np.tile(
-                interferometer.time_domain_strain.conjugate() * signal /
+                interferometer.time_domain_strain * signal /
                 interferometer.covariance_matrix, (self.number_of_response_curves, 1)).T
 
             d_inner_h_integrand[_mask] *= self.calibration_draws[interferometer.name].T
@@ -1419,14 +1419,14 @@ class TDGravitationalWaveTransient(Likelihood):
         elif self.time_marginalization and not self.calibration_marginalization:
             d_inner_h_array = normalization * np.fft.fft(
                 signal[0:-1]
-                * interferometer.time_domain_strain.conjugate()[0:-1]
+                * interferometer.time_domain_strain[0:-1]
                 / interferometer.covariance_matrix[0:-1]
             )
 
         elif self.calibration_marginalization and ('recalib_index' not in self.parameters):
             d_inner_h_integrand = (
                 normalization *
-                interferometer.time_domain_strain.conjugate() * signal
+                interferometer.time_domain_strain * signal
                 / interferometer.covariance_matrix
             )
             d_inner_h_array = np.dot(d_inner_h_integrand[_mask], self.calibration_draws[interferometer.name].T)
@@ -1699,6 +1699,7 @@ class TDGravitationalWaveTransient(Likelihood):
         psd = np.ones(n_time_steps)
         signal_long = np.zeros(n_time_steps, dtype=complex)
         data = np.zeros(n_time_steps, dtype=complex)
+        cov = np.zeros(n_time_steps, dtype=complex)
         h_inner_h = np.zeros(1)
         for ifo in self.interferometers:
             ifo_length = len(ifo.time_domain_strain)
