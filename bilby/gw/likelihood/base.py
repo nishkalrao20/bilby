@@ -1384,8 +1384,7 @@ class TDGravitationalWaveTransient(Likelihood):
         if 'recalib_index' in self.parameters:
             signal[_mask] *= self.calibration_draws[interferometer.name][int(self.parameters['recalib_index'])]
 
-        d_inner_h = interferometer.td_inner_product(signal=signal)
-        optimal_snr_squared = interferometer.td_optimal_snr_squared(signal=signal)
+        d_inner_h, optimal_snr_squared = interferometer.td_inner_product_optimal_snr(signal=signal)
         complex_matched_filter_snr = d_inner_h / (optimal_snr_squared**0.5)
 
         d_inner_h_array = None

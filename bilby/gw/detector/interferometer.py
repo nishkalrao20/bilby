@@ -709,6 +709,24 @@ class Interferometer(object):
             acf=self.acf[self.strain_data.time_mask],
             duration=self.strain_data.duration)
     
+    def td_inner_product_optimal_snr(self, signal):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+
+        Returns
+        =======
+        float: The optimal signal to noise ratio possible squared
+        """
+        return gwutils.td_noise_weighted_inner_product_optimal_snr(
+            aa=signal[self.strain_data.time_mask],
+            bb=self.strain_data.time_domain_strain[self.strain_data.time_mask],
+            acf=self.acf[self.strain_data.time_mask],
+            duration=self.strain_data.duration)
+
     def matched_filter_snr(self, signal):
         """
 
