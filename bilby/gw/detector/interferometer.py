@@ -350,8 +350,8 @@ class Interferometer(object):
         times: array-like, optional
         The time values to evaluate the response at. If
         not provided, the response is computed using
-        :code:`self.time_array`. If the frequencies are
-        specified, no frequency masking is performed.
+        :code:`self.time_array`. If the times are
+        specified, no time masking is performed.
         Returns
         =======
         array_like: A 3x3 array representation of the detector response (signal observed in the interferometer)
