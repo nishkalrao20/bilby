@@ -176,35 +176,9 @@ def td_noise_weighted_inner_product(aa, bb, acf, duration):
     ======
     Noise-weighted inner product.
     """
-
+    
     ow = solving_toeplitz(aa, acf)
-    return 4 / duration * np.dot(ow, bb)/np.sqrt(np.dot(aa, ow))
-
-
-def td_noise_weighted_inner_product_optimal_snr(aa, bb, acf, duration):
-    """
-    Calculate the noise weighted inner product and the square of the optimal matched filter SNR for the provided
-    signal.
-
-    Parameters
-    ==========
-    aa: array_like
-        Array 
-    bb: array_like
-        Array 
-    acf: array_like
-        Autocorrelation function of the noise
-    duration: float
-        duration of the data
-
-    Returns
-    ======
-    Noise-weighted inner product.
-    """
-
-    ow = solving_toeplitz(aa, acf)
-    normalisation = 4 / duration / np.sqrt(np.dot(aa, ow))
-    return normalisation * np.dot(ow, bb), normalisation * np.dot(aa, ow)
+    return 4 / duration * np.dot(ow, bb)
 
 
 def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, duration):
@@ -260,8 +234,8 @@ def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
     """
 
     ow = solving_toeplitz(signal, acf)
-    rho_mf = 4 / duration * np.dot(ow, time_domain_strain)/np.sqrt(np.dot(signal, ow))
-    rho_mf /= (4 / duration * np.dot(signal, signal)/np.sqrt(np.dot(signal, ow)))**0.5
+    rho_mf = td_noise_weighted_inner_product(aa=signal, bb=time_domain_strain, acf=acf, duration=duration)
+    rho_mf /= td_optimal_snr_squared(signal=signal, acf=acf, duration=duration)**0.5
 
     return rho_mf
 
@@ -307,6 +281,31 @@ def td_optimal_snr_squared(signal, acf, duration):
 
     """
     return td_noise_weighted_inner_product(signal, signal, acf, duration)
+
+
+def td_noise_weighted_inner_product_optimal_snr(aa, bb, acf, duration):
+    """
+    Calculate the noise weighted inner product and the square of the optimal matched filter SNR for the provided
+    signal.
+
+    Parameters
+    ==========
+    aa: array_like
+        Array 
+    bb: array_like
+        Array 
+    acf: array_like
+        Autocorrelation function of the noise
+    duration: float
+        duration of the data
+
+    Returns
+    ======
+    Noise-weighted inner product.
+    """
+
+    ow = solving_toeplitz(aa, acf)
+    return 4 / duration * np.dot(ow, bb), 4 / duration * np.dot(ow, aa)
 
 
 def overlap(signal_a, signal_b, power_spectral_density=None, delta_frequency=None,
