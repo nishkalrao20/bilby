@@ -1355,100 +1355,6 @@ class TDGravitationalWaveTransient(Likelihood):
 
     def calculate_snrs(self, waveform_polarizations, interferometer, return_array=True):
         """
-        Compute the snrs
-
-        Parameters
-        ----------
-        waveform_polarizations: dict
-            A dictionary of waveform polarizations and the corresponding array
-        interferometer: bilby.gw.detector.Interferometer
-            The bilby interferometer object
-        return_array: bool
-            If true, calculate and return internal array objects
-            (d_inner_h_array and optimal_snr_squared_array), otherwise
-            these are returned as None.
-
-        Returns
-        -------
-        calculated_snrs: _CalculatedSNRs
-            An object containing the SNR quantities and (if return_array=True)
-            the internal array objects.
-
-        """
-        signal = self._compute_full_waveform(
-            signal_polarizations=waveform_polarizations,
-            interferometer=interferometer,
-        )
-        _mask = interferometer.frequency_mask
-
-        if 'recalib_index' in self.parameters:
-            signal[_mask] *= self.calibration_draws[interferometer.name][int(self.parameters['recalib_index'])]
-
-        d_inner_h = interferometer.inner_product(signal=signal)
-        optimal_snr_squared = interferometer.optimal_snr_squared(signal=signal)
-        complex_matched_filter_snr = d_inner_h / (optimal_snr_squared**0.5)
-
-        d_inner_h_array = None
-        optimal_snr_squared_array = None
-
-        normalization = 4 / self.waveform_generator.duration
-
-        if return_array is False:
-            d_inner_h_array = None
-            optimal_snr_squared_array = None
-        elif self.time_marginalization and self.calibration_marginalization:
-
-            d_inner_h_integrand = np.tile(
-                interferometer.frequency_domain_strain.conjugate() * signal /
-                interferometer.power_spectral_density_array, (self.number_of_response_curves, 1)).T
-
-            d_inner_h_integrand[_mask] *= self.calibration_draws[interferometer.name].T
-
-            d_inner_h_array = 4 / self.waveform_generator.duration * np.fft.fft(
-                d_inner_h_integrand[0:-1], axis=0
-            ).T
-
-            optimal_snr_squared_integrand = (
-                normalization * np.abs(signal)**2 / interferometer.power_spectral_density_array
-            )
-            optimal_snr_squared_array = np.dot(
-                optimal_snr_squared_integrand[_mask],
-                self.calibration_abs_draws[interferometer.name].T
-            )
-
-        elif self.time_marginalization and not self.calibration_marginalization:
-            d_inner_h_array = normalization * np.fft.fft(
-                signal[0:-1]
-                * interferometer.frequency_domain_strain.conjugate()[0:-1]
-                / interferometer.power_spectral_density_array[0:-1]
-            )
-
-        elif self.calibration_marginalization and ('recalib_index' not in self.parameters):
-            d_inner_h_integrand = (
-                normalization *
-                interferometer.frequency_domain_strain.conjugate() * signal
-                / interferometer.power_spectral_density_array
-            )
-            d_inner_h_array = np.dot(d_inner_h_integrand[_mask], self.calibration_draws[interferometer.name].T)
-
-            optimal_snr_squared_integrand = (
-                normalization * np.abs(signal)**2 / interferometer.power_spectral_density_array
-            )
-            optimal_snr_squared_array = np.dot(
-                optimal_snr_squared_integrand[_mask],
-                self.calibration_abs_draws[interferometer.name].T
-            )
-
-        return self._CalculatedSNRs(
-            d_inner_h=d_inner_h,
-            optimal_snr_squared=optimal_snr_squared.real,
-            complex_matched_filter_snr=complex_matched_filter_snr,
-            d_inner_h_array=d_inner_h_array,
-            optimal_snr_squared_array=optimal_snr_squared_array,
-        )
-
-    def calculate_snrs_td(self, waveform_polarizations, interferometer, return_array=True):
-        """
         Compute the snrs for the time domain waveform polarizations
 
         Parameters
@@ -1613,7 +1519,7 @@ class TDGravitationalWaveTransient(Likelihood):
         total_snrs = self._CalculatedSNRs()
 
         for interferometer in self.interferometers:
-            per_detector_snr = self.calculate_snrs_td(
+            per_detector_snr = self.calculate_snrs(
                 waveform_polarizations=waveform_polarizations,
                 interferometer=interferometer)
 
@@ -1661,7 +1567,7 @@ class TDGravitationalWaveTransient(Likelihood):
         self.parameters.update(self.get_sky_frame_parameters())
 
         for interferometer in self.interferometers:
-            per_detector_snr = self.calculate_snrs_td(
+            per_detector_snr = self.calculate_snrs(
                 waveform_polarizations=waveform_polarizations,
                 interferometer=interferometer)
 
@@ -1881,7 +1787,7 @@ class TDGravitationalWaveTransient(Likelihood):
         d_inner_h = 0
         h_inner_h = 0
         for interferometer in self.interferometers:
-            per_detector_snr = self.calculate_snrs_td(
+            per_detector_snr = self.calculate_snrs(
                 signal_polarizations, interferometer)
 
             d_inner_h += per_detector_snr.d_inner_h
@@ -1892,7 +1798,7 @@ class TDGravitationalWaveTransient(Likelihood):
         d_inner_h = 0
         h_inner_h = 0
         for interferometer in self.interferometers:
-            per_detector_snr = self.calculate_snrs_td(
+            per_detector_snr = self.calculate_snrs(
                 signal_polarizations, interferometer)
 
             d_inner_h += per_detector_snr.d_inner_h
@@ -2023,7 +1929,7 @@ class TDGravitationalWaveTransient(Likelihood):
         total_snrs = self._CalculatedSNRs()
 
         for interferometer in self.interferometers:
-            per_detector_snr = self.calculate_snrs_td(
+            per_detector_snr = self.calculate_snrs(
                 waveform_polarizations=signal_polarizations,
                 interferometer=interferometer)
 

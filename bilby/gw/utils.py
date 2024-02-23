@@ -234,9 +234,12 @@ def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
     """
 
     ow = solving_toeplitz(signal, acf)
-    rho_mf = td_noise_weighted_inner_product(aa=signal, bb=time_domain_strain, acf=acf, duration=duration)
-    rho_mf /= td_optimal_snr_squared(signal=signal, acf=acf, duration=duration)**0.5
-
+    rho_mf = td_noise_weighted_inner_product(
+        aa=signal, bb=time_domain_strain, 
+        acf=acf, duration=duration)
+    rho_mf /= td_optimal_snr_squared(
+        signal=signal, acf=acf, 
+        duration=duration)**0.5
     return rho_mf
 
 
@@ -303,7 +306,6 @@ def td_noise_weighted_inner_product_optimal_snr(aa, bb, acf, duration):
     ======
     Noise-weighted inner product.
     """
-
     ow = solving_toeplitz(aa, acf)
     return 4 / duration * np.dot(ow, bb), 4 / duration * np.dot(ow, aa)
 
