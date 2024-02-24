@@ -27,7 +27,6 @@ from .utils import (lalsim_SimNeutronStarEOS4ParamSDGammaCheck,
                     lalsim_SimNeutronStarLoveNumberK2)
 
 from ..core.likelihood import MarginalizedLikelihoodReconstructionError
-from ..gw.likelihood import TDGravitationalWaveTransient
 from ..core.utils import logger, solar_mass, gravitational_constant, speed_of_light, command_line_args, safe_file_dump
 from ..core.prior import DeltaFunction
 from .utils import lalsim_SimInspiralTransformPrecessingNewInitialConditions
@@ -2224,7 +2223,7 @@ def compute_snrs(sample, likelihood, npool=1):
     if likelihood is not None:
         if isinstance(sample, dict):
             likelihood.parameters.update(sample)
-            if likelihood.__class__.__name__ is 'TDGravitationalWaveTransient':
+            if likelihood.__class__.__name__ == 'TDGravitationalWaveTransient':
                 signal_polarizations = likelihood.waveform_generator.time_domain_strain(likelihood.parameters.copy())
             else:
                 signal_polarizations = likelihood.waveform_generator.frequency_domain_strain(likelihood.parameters.copy())
@@ -2280,7 +2279,7 @@ def _compute_snrs(args):
     ii, sample = args
     sample = dict(sample).copy()
     likelihood.parameters.update(sample)
-    if likelihood.__class__.__name__ is 'TDGravitationalWaveTransient':
+    if likelihood.__class__.__name__ == 'TDGravitationalWaveTransient':
         signal_polarizations = likelihood.waveform_generator.time_domain_strain(
             likelihood.parameters.copy()
         )
