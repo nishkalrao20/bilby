@@ -249,6 +249,13 @@ class InterferometerStrainData(object):
         else:
             raise ValueError("time domain strain data not yet set")
 
+    @time_domain_strain.setter
+    def time_domain_strain(self, time_domain_strain):
+        if not len(self.time_array) == len(time_domain_strain):
+            raise ValueError("The time_array and the set strain have different lengths")
+        self._time_domain_strain = time_domain_strain
+        self._frequency_domain_strain = None
+
     @property
     def frequency_domain_strain(self):
         """ Returns the frequency domain strain

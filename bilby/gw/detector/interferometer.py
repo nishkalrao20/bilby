@@ -150,6 +150,31 @@ class Interferometer(object):
             sampling_frequency=sampling_frequency, duration=duration,
             start_time=start_time, frequency_array=frequency_array)
 
+    def set_strain_data_from_time_domain_strain(
+            self, time_domain_strain, sampling_frequency=None,
+            duration=None, start_time=0, time_array=None):
+        """ Set the `Interferometer.strain_data` from a numpy array
+
+        Parameters
+        ==========
+        time_domain_strain: array_like
+            The data to set.
+        sampling_frequency: float
+            The sampling frequency (in Hz).
+        duration: float
+            The data duration (in s).
+        start_time: float
+            The GPS start-time of the data.
+        frequency_array: array_like
+            The array of frequencies, if sampling_frequency and duration not
+            given.
+
+        """
+        self.strain_data.set_from_time_domain_strain(
+            time_domain_strain=time_domain_strain,
+            sampling_frequency=sampling_frequency, duration=duration,
+            start_time=start_time, frequency_array=time_array)
+        
     def set_strain_data_from_power_spectral_density(
             self, sampling_frequency, duration, start_time=0):
         """ Set the `Interferometer.strain_data` from a power spectal density
@@ -482,6 +507,57 @@ class Interferometer(object):
                                                                                  waveform_generator=waveform_generator)
         return injection_polarizations
 
+    def inject_td_signal(self, parameters, injection_polarizations=None,
+                      waveform_generator=None, raise_error=True):
+        """ General signal injection method.
+        Provide the injection parameters and either the injection polarizations
+        or the waveform generator to inject a signal into the detector.
+        Defaults to the injection polarizations is both are given.
+
+        Parameters
+        ==========
+        parameters: dict
+            Parameters of the injection.
+        injection_polarizations: dict, optional
+           Polarizations of waveform to inject, output of
+           `waveform_generator.time_domain_strain()`. If
+           `waveform_generator` is also given, the injection_polarizations will
+           be calculated directly and this argument can be ignored.
+        waveform_generator: bilby.gw.waveform_generator.WaveformGenerator, optional
+            A WaveformGenerator instance using the source model to inject. If
+            `injection_polarizations` is given, this will be ignored.
+        raise_error: bool
+            If true, raise an error if the injected signal has a duration
+            longer than the data duration. If False, a warning will be printed
+            instead.
+
+        Notes
+        =====
+        if your signal takes a substantial amount of time to generate, or
+        you experience buggy behaviour. It is preferable to provide the
+        injection_polarizations directly.
+
+        Returns
+        =======
+        injection_polarizations: dict
+            The injected polarizations. This is the same as the injection_polarizations parameters
+            if it was passed in. Otherwise it is the return value of waveform_generator.time_domain_strain().
+
+        """
+        self.check_signal_duration(parameters, raise_error)
+
+        if injection_polarizations is None and waveform_generator is None:
+            raise ValueError(
+                "inject_td_signal needs one of waveform_generator or "
+                "injection_polarizations.")
+        elif injection_polarizations is not None:
+            self.inject_td_signal_from_waveform_polarizations(parameters=parameters,
+                                                           injection_polarizations=injection_polarizations)
+        elif waveform_generator is not None:
+            injection_polarizations = self.inject_td_signal_from_waveform_generator(parameters=parameters,
+                                                                                 waveform_generator=waveform_generator)
+        return injection_polarizations
+
     def inject_signal_from_waveform_generator(self, parameters, waveform_generator):
         """ Inject a signal using a waveform generator and a set of parameters.
         Alternative to `inject_signal` and `inject_signal_from_waveform_polarizations`
@@ -511,6 +587,35 @@ class Interferometer(object):
                                                        injection_polarizations=injection_polarizations)
         return injection_polarizations
 
+    def inject_td_signal_from_waveform_generator(self, parameters, waveform_generator):
+        """ Inject a time domain signal using a waveform generator and a set of parameters.
+        Alternative to `inject_td_signal` and `inject_td_signal_from_waveform_polarizations`
+
+        Parameters
+        ==========
+        parameters: dict
+            Parameters of the injection.
+        waveform_generator: bilby.gw.waveform_generator.WaveformGenerator
+            A WaveformGenerator instance using the source model to inject.
+
+        Notes
+        =====
+        if your signal takes a substantial amount of time to generate, or
+        you experience buggy behaviour. It is preferable to use the
+        inject_td_signal_from_waveform_polarizations() method.
+
+        Returns
+        =======
+        injection_polarizations: dict
+            The internally generated injection parameters
+
+        """
+        injection_polarizations = \
+            waveform_generator.time_domain_strain(parameters)
+        self.inject_td_signal_from_waveform_polarizations(parameters=parameters,
+                                                       injection_polarizations=injection_polarizations)
+        return injection_polarizations
+    
     def inject_signal_from_waveform_polarizations(self, parameters, injection_polarizations):
         """ Inject a signal into the detector from a dict of waveform polarizations.
         Alternative to `inject_signal` and `inject_signal_from_waveform_generator`.
@@ -536,6 +641,39 @@ class Interferometer(object):
             np.sqrt(self.optimal_snr_squared(signal=signal_ifo)).real)
         self.meta_data['matched_filter_SNR'] = (
             self.matched_filter_snr(signal=signal_ifo))
+        self.meta_data['parameters'] = parameters
+
+        logger.info("Injected signal in {}:".format(self.name))
+        logger.info("  optimal SNR = {:.2f}".format(self.meta_data['optimal_SNR']))
+        logger.info("  matched filter SNR = {:.2f}".format(self.meta_data['matched_filter_SNR']))
+        for key in parameters:
+            logger.info('  {} = {}'.format(key, parameters[key]))
+
+    def inject_td_signal_from_waveform_polarizations(self, parameters, injection_polarizations):
+        """ Inject a signal into the detector from a dict of waveform polarizations.
+        Alternative to `inject_td_signal` and `inject_td_signal_from_waveform_generator`.
+
+        Parameters
+        ==========
+        parameters: dict
+            Parameters of the injection.
+        injection_polarizations: dict
+           Polarizations of waveform to inject, output of
+           `waveform_generator.time_domain_strain()`.
+
+        """
+        if not self.strain_data.time_within_data(parameters['geocent_time']):
+            logger.warning(
+                'Injecting signal outside segment, start_time={}, merger time={}.'
+                .format(self.strain_data.start_time, parameters['geocent_time']))
+
+        signal_ifo = self.get_td_detector_response(injection_polarizations, parameters)
+        self.strain_data.time_domain_strain += signal_ifo.real
+
+        self.meta_data['optimal_SNR'] = (
+            np.sqrt(self.td_optimal_snr_squared(signal=signal_ifo)).real)
+        self.meta_data['matched_filter_SNR'] = (
+            self.td_matched_filter_snr(signal=signal_ifo))
         self.meta_data['parameters'] = parameters
 
         logger.info("Injected signal in {}:".format(self.name))
@@ -744,6 +882,25 @@ class Interferometer(object):
             signal=signal[self.strain_data.frequency_mask],
             frequency_domain_strain=self.strain_data.frequency_domain_strain[self.strain_data.frequency_mask],
             power_spectral_density=self.power_spectral_density_array[self.strain_data.frequency_mask],
+            duration=self.strain_data.duration)
+    
+    def td_matched_filter_snr(self, signal):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+
+        Returns
+        =======
+        float: The matched filter signal to noise ratio squared
+
+        """
+        return gwutils.td_matched_filter_snr( 
+            signal=signal[self.strain_data.time_mask],
+            time_domain_strain=self.strain_data.time_domain_strain[self.strain_data.time_mask],
+            acf=self.acf[self.strain_data.time_mask],
             duration=self.strain_data.duration)
 
     @property

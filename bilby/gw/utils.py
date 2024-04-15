@@ -780,6 +780,49 @@ def lalsim_SimInspiralFD(
     return SimInspiralFD(*args, waveform_dictionary, approximant)
 
 
+def lalsim_SimInspiralTD(
+        mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y,
+        spin_2z, luminosity_distance, iota, phase,
+        longitude_ascending_nodes, eccentricity, mean_per_ano, delta_time,
+        minimum_frequency, reference_frequency,
+        waveform_dictionary, approximant):
+    """
+    Safely call lalsimulation.SimInspiralTD
+
+    Parameters
+    ==========
+    phase: float, int
+    mass_1: float, int
+    mass_2: float, int
+    spin_1x: float, int
+    spin_1y: float, int
+    spin_1z: float, int
+    spin_2x: float, int
+    spin_2y: float, int
+    spin_2z: float, int
+    reference_frequency: float, int
+    luminosity_distance: float, int
+    iota: float, int
+    longitude_ascending_nodes: float, int
+    eccentricity: float, int
+    mean_per_ano: float, int
+    delta_time: float, int
+    minimum_frequency: float, int
+    waveform_dictionary: None, lal.Dict
+    approximant: int, str
+    """
+    from lalsimulation import SimInspiralTD
+    
+    args = convert_args_list_to_float(
+        mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y, spin_2z,
+        luminosity_distance, iota, phase, longitude_ascending_nodes,
+        eccentricity, mean_per_ano, delta_time, minimum_frequency, reference_frequency)
+
+    approximant = _get_lalsim_approximant(approximant)
+
+    return SimInspiralTD(*args, waveform_dictionary, approximant)
+
+
 def lalsim_SimInspiralChooseFDWaveform(
         mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y,
         spin_2z, luminosity_distance, iota, phase,
