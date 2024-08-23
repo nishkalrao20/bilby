@@ -1250,7 +1250,7 @@ class TDGravitationalWaveTransient(Likelihood):
             distance_marginalization=False, phase_marginalization=False, calibration_marginalization=False, priors=None,
             distance_marginalization_lookup_table=None, calibration_lookup_table=None,
             number_of_response_curves=1000, starting_index=0, jitter_time=True, reference_frame="sky",
-            time_reference="geocenter"
+            time_reference="geocenter", excise_time = False, excise_start_time=None, excise_end_time=None,
     ):
 
         self.waveform_generator = waveform_generator
@@ -1265,6 +1265,9 @@ class TDGravitationalWaveTransient(Likelihood):
         self._noise_log_likelihood_value = None
         self.jitter_time = jitter_time
         self.reference_frame = reference_frame
+        self.excise_time = excise_time
+        self.excise_start_time = excise_start_time
+        self.excise_end_time = excise_end_time
         if "geocent" not in time_reference:
             self.time_reference = time_reference
             self.reference_ifo = get_empty_interferometer(self.time_reference)
@@ -1384,8 +1387,13 @@ class TDGravitationalWaveTransient(Likelihood):
         if 'recalib_index' in self.parameters:
             signal[_mask] *= self.calibration_draws[interferometer.name][int(self.parameters['recalib_index'])]
 
-        d_inner_h, optimal_snr_squared = interferometer.td_inner_product_optimal_snr(signal=signal)
-        complex_matched_filter_snr = d_inner_h / (optimal_snr_squared**0.5)
+        if self.excise_time:
+            mask = (self._times >= self.excise_start_time) & (self._times <= self.excise_end_time)
+            d_inner_h, optimal_snr_squared = interferometer.td_inner_product_optimal_snr_inpainting(signal=signal_inpainting, mask=mask)
+            complex_matched_filter_snr = d_inner_h / (optimal_snr_squared**0.5)
+        else:
+            d_inner_h, optimal_snr_squared = interferometer.td_inner_product_optimal_snr(signal=signal)
+            complex_matched_filter_snr = d_inner_h / (optimal_snr_squared**0.5)
 
         d_inner_h_array = None
         optimal_snr_squared_array = None

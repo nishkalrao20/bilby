@@ -668,10 +668,10 @@ class Interferometer(object):
                 .format(self.strain_data.start_time, parameters['geocent_time']))
 
         signal_ifo = self.get_td_detector_response(injection_polarizations, parameters)
-        self.strain_data.time_domain_strain += signal_ifo.real
+        self.strain_data.time_domain_strain += signal_ifo
 
         self.meta_data['optimal_SNR'] = (
-            np.sqrt(self.td_optimal_snr_squared(signal=signal_ifo)).real)
+            np.sqrt(self.td_optimal_snr_squared(signal=signal_ifo)))
         self.meta_data['matched_filter_SNR'] = (
             self.td_matched_filter_snr(signal=signal_ifo))
         self.meta_data['parameters'] = parameters
@@ -698,7 +698,7 @@ class Interferometer(object):
 
     @property
     def power_spectral_density_array(self):
-        """ Returns the power spectral density (PSD)
+        """Returns the power spectral density (PSD)
 
         This accounts for whether the data in the interferometer has been windowed.
 
@@ -735,6 +735,16 @@ class Interferometer(object):
         
         """
         return sp.linalg.toeplitz(self.acf)
+    
+    def inverse_covariance_matrix(self):
+        """Returns the inverse noise correlation matrix
+
+        Returns
+        =======
+        array_like: An array representation of the inverse noise correlation matrix
+        
+        """
+        return np.linalg.inv(self.covariance_matrix)
     
     def unit_vector_along_arm(self, arm):
         logger.warning("This method has been moved and will be removed in the future."
@@ -843,7 +853,7 @@ class Interferometer(object):
         """
         return gwutils.td_noise_weighted_inner_product(
             aa=signal[self.strain_data.time_mask],
-            bb=self.strain_data.time_domain_strain[self.strain_data.time_mask],
+            bb=self.strain_data.time_domain_strain[self.strain_data.time_mask],#FFT
             acf=self.acf[self.strain_data.time_mask],
             duration=self.strain_data.duration)
     
@@ -861,7 +871,41 @@ class Interferometer(object):
         """
         return gwutils.td_noise_weighted_inner_product_optimal_snr(
             aa=signal[self.strain_data.time_mask],
-            bb=self.strain_data.time_domain_strain[self.strain_data.time_mask],
+            bb=self.strain_data.time_domain_strain[self.strain_data.time_mask],#FFT
+            acf=self.acf[self.strain_data.time_mask],
+            duration=self.strain_data.duration)
+    
+    def td_inner_product_optimal_snr_inpainting(self, signal, mask):
+        """
+
+        Parameters
+        ==========
+        signal: array_like
+            Array containing the signal
+        mask: array_like
+            Array containing the mask
+
+        Returns
+        =======
+        float: The optimal signal to noise ratio possible squared
+        """
+        signal_tr = signal[self.strain_data.time_mask].copy()
+        data_tr = self.strain_data.time_domain_strain[self.strain_data.time_mask].copy()
+        signal_tr[mask], data_tr[mask] = 0, 0
+
+        signal_x, data_x = np.zeros_like(signal_tr), np.zeros_like(data_tr)
+        signal_rhs = -sp.linalg.solve_toeplitz(self.acf[:len(signal_tr)], signal_tr, check_finite=False)
+        data_rhs = -sp.linalg.solve_toeplitz(self.acf[:len(data_tr)], data_tr, check_finite=False)
+
+        signal_x[mask] = np.linalg.solve(self.inverse_covariance_matrix[np.ix_(mask, mask)], signal_rhs[mask])
+        data_x[mask] = np.linalg.solve(self.inverse_covariance_matrix[np.ix_(mask, mask)], data_rhs[mask])
+        
+        signal_inpainting, data_inpainting = signal_tr.copy(), data_tr.copy()
+        signal_inpainting[mask], data_inpainting[mask] = signal_x[mask], data_x[mask]
+        
+        return gwutils.td_noise_weighted_inner_product_optimal_snr(
+            aa=signal_inpainting,
+            bb=data_inpainting,
             acf=self.acf[self.strain_data.time_mask],
             duration=self.strain_data.duration)
 
@@ -899,7 +943,7 @@ class Interferometer(object):
         """
         return gwutils.td_matched_filter_snr( 
             signal=signal[self.strain_data.time_mask],
-            time_domain_strain=self.strain_data.time_domain_strain[self.strain_data.time_mask],
+            time_domain_strain=self.strain_data.time_domain_strain[self.strain_data.time_mask],#FFT
             acf=self.acf[self.strain_data.time_mask],
             duration=self.strain_data.duration)
 
