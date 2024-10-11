@@ -3,6 +3,7 @@ import os
 from functools import lru_cache
 
 import numpy as np
+import scipy as sp
 from scipy.interpolate import interp1d
 from scipy.special import i0e
 from bilby_cython.geometry import (
@@ -137,6 +138,49 @@ def noise_weighted_inner_product(aa, bb, power_spectral_density, duration):
     return 4 / duration * np.sum(integrand)
 
 
+def solving_toeplitz(aa, acf):
+    """
+    Calculate the inverse of a Toeplitz matrix using Levinson recursion.
+
+    Parameters
+    ==========
+    aa: array_like
+        Time series array
+    acf: array_like
+        Autocorrelation function of the noise
+
+    Returns
+    =======
+    Inverse of the Toeplitz matrix product with aa.
+    """
+
+    return sp.linalg.solve_toeplitz(acf[:len(aa)], aa, check_finite=False)
+
+
+def td_noise_weighted_inner_product(aa, bb, acf, duration):
+    """
+    Calculate the noise weighted inner product between two arrays.
+
+    Parameters
+    ==========
+    aa: array_like
+        Array 
+    bb: array_like
+        Array 
+    acf: array_like
+        Autocorrelation function of the noise
+    duration: float
+        duration of the data
+
+    Returns
+    ======
+    Noise-weighted inner product.
+    """
+    
+    ow = solving_toeplitz(aa, acf)
+    return 4 / duration * np.dot(ow, bb)
+
+
 def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, duration):
     """
     Calculate the _complex_ matched filter snr of a signal.
@@ -167,6 +211,38 @@ def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, 
     return rho_mf
 
 
+def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
+    """
+    Calculate the _complex_ matched filter snr of a signal.
+    This is <signal|time_domain_strain> / optimal_snr
+
+    Parameters
+    ==========
+    signal: array_like
+        Array containing the signal
+    time_domain_strain: array_like
+
+    acf: array_like
+
+    duration: float
+        Time duration of the signal
+
+    Returns
+    =======
+    float: The matched filter signal to noise ratio squared
+
+    """
+
+    ow = solving_toeplitz(signal, acf)
+    rho_mf = td_noise_weighted_inner_product(
+        aa=signal, bb=time_domain_strain, 
+        acf=acf, duration=duration)
+    rho_mf /= td_optimal_snr_squared(
+        signal=signal, acf=acf, 
+        duration=duration)**0.5
+    return rho_mf
+
+
 def optimal_snr_squared(signal, power_spectral_density, duration):
     """
     Compute the square of the optimal matched filter SNR for the provided
@@ -188,6 +264,50 @@ def optimal_snr_squared(signal, power_spectral_density, duration):
 
     """
     return noise_weighted_inner_product(signal, signal, power_spectral_density, duration)
+
+
+def td_optimal_snr_squared(signal, acf, duration):
+    """
+
+    Parameters
+    ==========
+    signal: array_like
+        Array containing the signal
+    acf: array_like
+
+    duration: float
+        Time duration of the signal
+
+    Returns
+    =======
+    float: The matched filter signal to noise ratio squared
+
+    """
+    return td_noise_weighted_inner_product(signal, signal, acf, duration)
+
+
+def td_noise_weighted_inner_product_optimal_snr(aa, bb, acf, duration):
+    """
+    Calculate the noise weighted inner product and the square of the optimal matched filter SNR for the provided
+    signal.
+
+    Parameters
+    ==========
+    aa: array_like
+        Array 
+    bb: array_like
+        Array 
+    acf: array_like
+        Autocorrelation function of the noise
+    duration: float
+        duration of the data
+
+    Returns
+    ======
+    Noise-weighted inner product.
+    """
+    ow = solving_toeplitz(aa, acf)
+    return 4 / duration * np.dot(ow, bb), 4 / duration * np.dot(ow, aa)
 
 
 def overlap(signal_a, signal_b, power_spectral_density=None, delta_frequency=None,
@@ -658,6 +778,49 @@ def lalsim_SimInspiralFD(
     approximant = _get_lalsim_approximant(approximant)
 
     return SimInspiralFD(*args, waveform_dictionary, approximant)
+
+
+def lalsim_SimInspiralTD(
+        mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y,
+        spin_2z, luminosity_distance, iota, phase,
+        longitude_ascending_nodes, eccentricity, mean_per_ano, delta_time,
+        minimum_frequency, reference_frequency,
+        waveform_dictionary, approximant):
+    """
+    Safely call lalsimulation.SimInspiralTD
+
+    Parameters
+    ==========
+    phase: float, int
+    mass_1: float, int
+    mass_2: float, int
+    spin_1x: float, int
+    spin_1y: float, int
+    spin_1z: float, int
+    spin_2x: float, int
+    spin_2y: float, int
+    spin_2z: float, int
+    reference_frequency: float, int
+    luminosity_distance: float, int
+    iota: float, int
+    longitude_ascending_nodes: float, int
+    eccentricity: float, int
+    mean_per_ano: float, int
+    delta_time: float, int
+    minimum_frequency: float, int
+    waveform_dictionary: None, lal.Dict
+    approximant: int, str
+    """
+    from lalsimulation import SimInspiralTD
+    
+    args = convert_args_list_to_float(
+        mass_1, mass_2, spin_1x, spin_1y, spin_1z, spin_2x, spin_2y, spin_2z,
+        luminosity_distance, iota, phase, longitude_ascending_nodes,
+        eccentricity, mean_per_ano, delta_time, minimum_frequency, reference_frequency)
+
+    approximant = _get_lalsim_approximant(approximant)
+
+    return SimInspiralTD(*args, waveform_dictionary, approximant)
 
 
 def lalsim_SimInspiralChooseFDWaveform(

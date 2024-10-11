@@ -2216,14 +2216,17 @@ def compute_snrs(sample, likelihood, npool=1):
     ==========
     sample: dict or array_like
 
-    likelihood: bilby.gw.likelihood.GravitationalWaveTransient
+    likelihood: bilby.gw.likelihood.GravitationalWaveTransient/bilby.gw.likelihood.TDGravitationalWaveTransient
         Likelihood function to be applied on the posterior
 
     """
     if likelihood is not None:
         if isinstance(sample, dict):
             likelihood.parameters.update(sample)
-            signal_polarizations = likelihood.waveform_generator.frequency_domain_strain(likelihood.parameters.copy())
+            if likelihood.__class__.__name__ == 'TDGravitationalWaveTransient':
+                signal_polarizations = likelihood.waveform_generator.time_domain_strain(likelihood.parameters.copy())
+            else:
+                signal_polarizations = likelihood.waveform_generator.frequency_domain_strain(likelihood.parameters.copy())
             for ifo in likelihood.interferometers:
                 per_detector_snr = likelihood.calculate_snrs(signal_polarizations, ifo)
                 sample['{}_matched_filter_snr'.format(ifo.name)] =\
@@ -2276,9 +2279,14 @@ def _compute_snrs(args):
     ii, sample = args
     sample = dict(sample).copy()
     likelihood.parameters.update(sample)
-    signal_polarizations = likelihood.waveform_generator.frequency_domain_strain(
-        likelihood.parameters.copy()
-    )
+    if likelihood.__class__.__name__ == 'TDGravitationalWaveTransient':
+        signal_polarizations = likelihood.waveform_generator.time_domain_strain(
+            likelihood.parameters.copy()
+        )
+    else:
+        signal_polarizations = likelihood.waveform_generator.frequency_domain_strain(
+            likelihood.parameters.copy()
+        )
     snrs = list()
     for ifo in likelihood.interferometers:
         snrs.append(likelihood.calculate_snrs(signal_polarizations, ifo, return_array=False))
