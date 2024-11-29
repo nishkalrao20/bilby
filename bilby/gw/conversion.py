@@ -2225,6 +2225,8 @@ def compute_snrs(sample, likelihood, npool=1):
             likelihood.parameters.update(sample)
             if likelihood.__class__.__name__ == 'TDGravitationalWaveTransient':
                 signal_polarizations = likelihood.waveform_generator.time_domain_strain(likelihood.parameters.copy())
+            elif likelihood.__class__.__name__ == 'TDCovGravitationalWaveTransient':
+                signal_polarizations = likelihood.waveform_generator.time_domain_strain(likelihood.parameters.copy())
             else:
                 signal_polarizations = likelihood.waveform_generator.frequency_domain_strain(likelihood.parameters.copy())
             for ifo in likelihood.interferometers:
@@ -2280,6 +2282,10 @@ def _compute_snrs(args):
     sample = dict(sample).copy()
     likelihood.parameters.update(sample)
     if likelihood.__class__.__name__ == 'TDGravitationalWaveTransient':
+        signal_polarizations = likelihood.waveform_generator.time_domain_strain(
+            likelihood.parameters.copy()
+        )
+    elif likelihood.__class__.__name__ == 'TDCovGravitationalWaveTransient':
         signal_polarizations = likelihood.waveform_generator.time_domain_strain(
             likelihood.parameters.copy()
         )

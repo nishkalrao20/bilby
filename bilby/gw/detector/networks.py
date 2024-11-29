@@ -243,6 +243,65 @@ class InterferometerList(list):
 
         return all_injection_polarizations
 
+    def inject_td_cov_signal(
+        self,
+        parameters=None,
+        injection_polarizations=None,
+        waveform_generator=None,
+        raise_error=True,
+    ):
+        """ Inject a time domain  signal into noise in each of the three detectors.
+
+        Parameters
+        ==========
+        parameters: dict
+            Parameters of the injection.
+        injection_polarizations: dict
+           Polarizations of waveform to inject, output of
+           `waveform_generator.frequency_domain_strain()`. If
+           `waveform_generator` is also given, the injection_polarizations will
+           be calculated directly and this argument can be ignored.
+        waveform_generator: bilby.gw.waveform_generator.WaveformGenerator
+            A WaveformGenerator instance using the source model to inject. If
+            `injection_polarizations` is given, this will be ignored.
+        raise_error: bool
+            Whether to raise an error if the injected signal does not fit in
+            the segment.
+
+        Notes
+        =====
+        if your signal takes a substantial amount of time to generate, or
+        you experience buggy behaviour. It is preferable to provide the
+        injection_polarizations directly.
+
+        Returns
+        =======
+        injection_polarizations: dict
+
+        """
+        if injection_polarizations is None:
+            if waveform_generator is not None:
+                injection_polarizations = waveform_generator.time_domain_strain(
+                    parameters
+                )
+            else:
+                raise ValueError(
+                    "inject_td_cov_signal needs one of waveform_generator or "
+                    "injection_polarizations."
+                )
+
+        all_injection_polarizations = list()
+        for interferometer in self:
+            all_injection_polarizations.append(
+                interferometer.inject_td_cov_signal(
+                    parameters=parameters,
+                    injection_polarizations=injection_polarizations,
+                    raise_error=raise_error,
+                )
+            )
+
+        return all_injection_polarizations
+
     def save_data(self, outdir, label=None):
         """Creates a save file for the data in plain text format
 

@@ -181,6 +181,26 @@ def td_noise_weighted_inner_product(aa, bb, acf, duration):
     return 4 / duration * np.dot(ow, bb)
 
 
+def td_cov_noise_weighted_inner_product(aa, bb, cov):
+    """
+    Calculate the noise weighted inner product between two arrays.
+
+    Parameters
+    ==========
+    aa: array_like
+        Array 
+    bb: array_like
+        Array 
+    cov: array_like
+        Inverse Covariance matrix of the noise
+
+    Returns
+    ======
+    Noise-weighted inner product.
+    """
+    return np.abs(np.dot(aa, np.dot(cov, bb)))
+
+
 def matched_filter_snr(signal, frequency_domain_strain, power_spectral_density, duration):
     """
     Calculate the _complex_ matched filter snr of a signal.
@@ -243,6 +263,33 @@ def td_matched_filter_snr(signal, time_domain_strain, acf, duration):
     return rho_mf
 
 
+def td_cov_matched_filter_snr(signal, time_domain_strain, cov):
+    """
+    Calculate the _complex_ matched filter snr of a signal.
+    This is <signal|time_domain_strain> / optimal_snr
+
+    Parameters
+    ==========
+    signal: array_like
+        Array containing the signal
+    time_domain_strain: array_like
+
+    cov: array_like
+
+    Returns
+    =======
+    float: The matched filter signal to noise ratio squared
+
+    """
+
+    rho_mf = td_cov_noise_weighted_inner_product(
+        aa=signal, bb=time_domain_strain, 
+        cov=cov)
+    rho_mf /= td_cov_optimal_snr_squared(
+        signal=signal, cov=cov)**0.5
+    return rho_mf
+
+
 def optimal_snr_squared(signal, power_spectral_density, duration):
     """
     Compute the square of the optimal matched filter SNR for the provided
@@ -286,6 +333,23 @@ def td_optimal_snr_squared(signal, acf, duration):
     return td_noise_weighted_inner_product(signal, signal, acf, duration)
 
 
+def td_cov_optimal_snr_squared(signal, cov):
+    """
+
+    Parameters
+    ==========
+    signal: array_like
+        Array containing the signal
+    cov: array_like
+
+    Returns
+    =======
+    float: The matched filter signal to noise ratio squared
+
+    """
+    return td_cov_noise_weighted_inner_product(signal, signal, cov)
+
+
 def td_noise_weighted_inner_product_optimal_snr(aa, bb, acf, duration):
     """
     Calculate the noise weighted inner product and the square of the optimal matched filter SNR for the provided
@@ -308,6 +372,27 @@ def td_noise_weighted_inner_product_optimal_snr(aa, bb, acf, duration):
     """
     ow = solving_toeplitz(aa, acf)
     return 4 / duration * np.dot(ow, bb), 4 / duration * np.dot(ow, aa)
+
+
+def td_cov_noise_weighted_inner_product_optimal_snr(aa, bb, cov):
+    """
+    Calculate the noise weighted inner product and the square of the optimal matched filter SNR for the provided
+    signal.
+
+    Parameters
+    ==========
+    aa: array_like
+        Array 
+    bb: array_like
+        Array 
+    cov: array_like
+        Inverse Covariance matrix of the noise
+
+    Returns
+    ======
+    Noise-weighted inner product.
+    """
+    return np.abs(np.dot(aa, np.dot(cov, bb))), np.abs(np.dot(aa, np.dot(cov, aa)))
 
 
 def overlap(signal_a, signal_b, power_spectral_density=None, delta_frequency=None,
